@@ -1,0 +1,4 @@
+/home/hashubuntu/Desktop/LearnGit/build/CMakeFiles/mobile_robot_lib.dir
+/home/hashubuntu/Desktop/LearnGit/build/CMakeFiles/mobile_robot_app.dir
+/home/hashubuntu/Desktop/LearnGit/build/CMakeFiles/edit_cache.dir
+/home/hashubuntu/Desktop/LearnGit/build/CMakeFiles/rebuild_cache.dir

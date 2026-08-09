@@ -1,0 +1,2 @@
+/usr/bin/ar qc libmobile_robot_lib.a CMakeFiles/mobile_robot_lib.dir/src/mobile_robot.cpp.o CMakeFiles/mobile_robot_lib.dir/src/wheel_data.cpp.o CMakeFiles/mobile_robot_lib.dir/src/odometry.cpp.o CMakeFiles/mobile_robot_lib.dir/src/lidar_data.cpp.o
+/usr/bin/ranlib libmobile_robot_lib.a

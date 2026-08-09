@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/mobile_robot_app.dir/apps/main.cpp.o -o mobile_robot_app  libmobile_robot_lib.a 
