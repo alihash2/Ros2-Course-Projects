@@ -32,11 +32,10 @@ File structure is:
 ├── include/
 │   └── ms02_mobile_robot_control/
 │       └── goto_pose_node.hpp
-├── src/
-│   ├── goto_pose_node.cpp
-│   └── goto_pose_node_app.cpp
-└── launch/
-    └── goto_pose.launch.py
+└── src/
+    ├── goto_pose_node.cpp
+    └── goto_pose_node_app.cpp
+
 
 ## 3. Building the Package
 
