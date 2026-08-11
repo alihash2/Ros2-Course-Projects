@@ -13,4 +13,11 @@ find_package(turtlesim REQUIRED)
 #export include dir
 include_directories(include)
 
+add_library(goto_pose_node_lib src/goto_pose_node.cpp)
+ament_target_dependencies(goto_pose_node_lib 
+rclcpp 
+geometry_msgs 
+turtlesim
+)
+
 ament_package()
