@@ -17,6 +17,7 @@ find_package(behaviortree_cpp REQUIRED)
 
 include_directories(include)
 
+# odom node:
 add_executable(odom_node src/odom_node.cpp)
 
 ament_target_dependencies(
@@ -26,9 +27,19 @@ ament_target_dependencies(
   tf2
 )
 
+# scan node:
+add_executable(scan_node src/scan_node.cpp)
+
+ament_target_dependencies(
+  scan_node
+  rclcpp
+  sensor_msgs
+)
+
 install(
   TARGETS
   odom_node
+  scan_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
