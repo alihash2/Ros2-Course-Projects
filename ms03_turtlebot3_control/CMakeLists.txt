@@ -36,10 +36,24 @@ ament_target_dependencies(
   sensor_msgs
 )
 
+#motionnode (ported Base motion controller)
+add_executable(motion_node src/motion_node.cpp)
+
+ament_target_dependencies(
+  motion_node
+  rclcpp
+  nav_msgs
+  geometry_msgs
+  tf2
+  tf2_geometry_msgs
+)
+
+
 install(
   TARGETS
   odom_node
   scan_node
+  motion_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
