@@ -1,0 +1,27 @@
+<root BTCPP_format="4">
+  <BehaviorTree ID="RecoveryNavTree">
+    <Fallback name="MainFallback">
+
+      <!-- 1. Check if the target goal pose is reached -->
+      <GoalCheck goal="{target_pose}"/>
+
+      <!-- 2. Otherwise, attempt normal driving or execute recovery -->
+      <Fallback name="NavigateOrRecover">
+
+        <!-- Normal Driving Sequence -->
+        <ReactiveSequence name="DriveSequence">
+          <Inverter>
+            <ObstacleCheck/>
+          </Inverter>
+          <!-- Drive toward target -->
+          <GoToPose goal="{target_pose}"/>
+        </ReactiveSequence>
+
+        <!-- Recovery: Rotate in place to clear path -->
+        <TurnRecovery/>
+
+      </Fallback>
+
+    </Fallback>
+  </BehaviorTree>
+</root>
