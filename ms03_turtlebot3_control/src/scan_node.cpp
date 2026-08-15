@@ -5,8 +5,8 @@ ScanNode::ScanNode()
 is_path_blocked_(false),
 is_path_clear_(true)
 {
-    this->declare_parameter<double>("safety_distance", 0.5);
-    this->declare_parameter<double>("front_angle_deg", 15.0);
+    this->declare_parameter<double>("safety_distance", 0.38);
+    this->declare_parameter<double>("front_angle_deg", 25.0);
 
     this->get_parameter("safety_distance", safety_distance_);
     this->get_parameter("front_angle_deg", front_angle_deg_);
@@ -36,29 +36,35 @@ void ScanNode::scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
     for(size_t i = 0; i < total_beams; ++i){
         float range = msg->ranges[i];
 
-        if(std::isnan(range) || std::isinf(range) || range < msg->range_min || range > msg->range_max)
+        if(std::isnan(range) || std::isinf(range))
         {
             continue;
         }
 
-        double angle_rad = msg->angle_min + i * msg->angle_increment;
-        double angle_deg = angle_rad * (180.0 / M_PI);
+        if (range > 0.0f && range < msg->range_min) {
+            range = msg->range_min;
+        }
 
-        while (angle_deg > 180.0) angle_deg -= 360.0;
-        while (angle_deg < -180.0) angle_deg += 360.0;
+        if (range <= 0.0f || range > msg->range_max) {
+            continue;
+        }
+
+        double angle_rad = msg->angle_min + i * msg->angle_increment;
+        angle_rad = std::atan2(std::sin(angle_rad), std::cos(angle_rad));
+        double angle_deg = angle_rad * (180.0 / M_PI);
 
         if(std::abs(angle_deg) <= front_angle_deg_){
             if(range < min_front_dist) min_front_dist = range;
         }
-        else if (angle_deg > front_angle_deg_ && angle_deg <= 60.0){
+        else if (angle_deg >= 20.0 && angle_deg <= 85.0){
             if(range < min_left_dist) min_left_dist = range;
         }
-        else if (angle_deg < -front_angle_deg_ && angle_deg >= -60){
+        else if (angle_deg <= -20.0 && angle_deg >= -85.0){
             if (range < min_right_dist) min_right_dist = range;
         }
     }
 
-    if (min_front_dist < safety_distance_){
+    if (min_front_dist < safety_distance_ || min_left_dist < 0.28 || min_right_dist < 0.28){
         is_path_blocked_ = true;
         is_path_clear_ = false;
     }
@@ -71,8 +77,8 @@ void ScanNode::scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
     std::string left_str = (min_left_dist == std::numeric_limits<double>::infinity()) ? "CLEAR" : std::to_string(min_left_dist).substr(0,4) + "m";
     std::string right_str = (min_right_dist == std::numeric_limits<double>::infinity()) ? "CLEAR" : std::to_string(min_right_dist).substr(0,4) + "m";
 
-    RCLCPP_INFO(this->get_logger(), 
-    "Front: [%s] | Left: [%s] | Right: [%s] | Status: %s",
+    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1500, 
+    "[SCAN NODE] Front: [%s] | Left: [%s] | Right: [%s] | Path: %s",
     front_str.c_str(), left_str.c_str(), right_str.c_str(),
     is_path_blocked_ ? "BLOCKED!" : "CLEAR"
     );

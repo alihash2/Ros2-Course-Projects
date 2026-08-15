@@ -4,10 +4,11 @@
 
 OdomNode::OdomNode() : Node("odom_node"){
     odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
-        "/odom", 10,
+        "/odom", rclcpp::SensorDataQoS(),
         std::bind(&OdomNode::odom_callback, this, std::placeholders::_1)
     );
-    RCLCPP_INFO(this->get_logger(), "Odom Node started. Listening to /odom...");
+    pose_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("/current_pose", 10);
+    RCLCPP_INFO(this->get_logger(), "Odom Node started. Listening to /odom, publishing to /current_pose...");
 }
 
 void OdomNode::odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg){
@@ -24,6 +25,11 @@ void OdomNode::odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg){
     tf2::Matrix3x3 m(q);
     double roll, pitch;
     m.getRPY(roll, pitch, current_yaw_);
+
+    geometry_msgs::msg::PoseStamped pose_msg;
+    pose_msg.header = msg->header;
+    pose_msg.pose = msg->pose.pose;
+    pose_pub_->publish(pose_msg);
 
     RCLCPP_INFO_THROTTLE(
         this->get_logger(), *this->get_clock(), 1000,

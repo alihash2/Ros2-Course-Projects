@@ -8,15 +8,25 @@ MotionNode::MotionNode() : Node("motion_node"){
 }
 
 void MotionNode::GoalCb(const geometry_msgs::msg::PoseStamped::SharedPtr msg){
-    gx_ = msg->pose.position.x;
-    gy_ = msg->pose.position.y;
-    active_ = true;
-    RCLCPP_INFO(this->get_logger(), "New target recieved: x=%.2f, y=%.2f", gx_, gy_);
+    double new_gx = msg->pose.position.x;
+    double new_gy = msg->pose.position.y;
+
+    double dx = new_gx - x_;
+    double dy = new_gy - y_;
+    if (std::hypot(dx, dy) < 0.05) {
+        active_ = false;
+        return;
+    }
+
+    if (!active_ || std::abs(new_gx - gx_) > 0.01 || std::abs(new_gy - gy_) > 0.01) {
+        gx_ = new_gx;
+        gy_ = new_gy;
+        active_ = true;
+        RCLCPP_INFO(this->get_logger(), "New target received: x=%.2f, y=%.2f", gx_, gy_);
+    }
 }
 
 void MotionNode::OdomCb(nav_msgs::msg::Odometry::SharedPtr msg){
-    if (!active_) return;
-
     x_ = msg->pose.pose.position.x;
     y_ = msg->pose.pose.position.y;
 
@@ -24,13 +34,15 @@ void MotionNode::OdomCb(nav_msgs::msg::Odometry::SharedPtr msg){
     double r, p;
     tf2::Matrix3x3(q).getRPY(r, p, yaw_);
 
+    if (!active_) return;
+
     double dx = gx_ - x_;
     double dy = gy_ - y_;
     double dist = std::sqrt(dx*dx + dy*dy);
     double heading_err = std::atan2(dy, dx) - yaw_;
 
     while (heading_err > M_PI) heading_err -= 2.0 * M_PI;
-    while (heading_err <-M_PI) heading_err += 2.0 * M_PI;
+    while (heading_err < -M_PI) heading_err += 2.0 * M_PI;
 
     geometry_msgs::msg::TwistStamped cmd;
     cmd.header.stamp = this->get_clock()->now();
@@ -44,7 +56,6 @@ void MotionNode::OdomCb(nav_msgs::msg::Odometry::SharedPtr msg){
         active_ = false;
         return;
     }
-    
 
     double v = std::clamp(0.5 * dist, -0.22, 0.22);
     double w = std::clamp(1.5 * heading_err, -1.0, 1.0);
@@ -56,7 +67,6 @@ void MotionNode::OdomCb(nav_msgs::msg::Odometry::SharedPtr msg){
     cmd.twist.linear.x = v;
     cmd.twist.angular.z = w;
     cmd_pub_->publish(cmd);
-
 }
 
 int main(int argc, char** argv){

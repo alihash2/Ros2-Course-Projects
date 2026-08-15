@@ -14,6 +14,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(behaviortree_cpp REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 
 include_directories(include)
 
@@ -48,13 +49,50 @@ ament_target_dependencies(
   tf2_geometry_msgs
 )
 
+#BehaviorTree Library
+add_library(bt_nodes_lib src/bt_nodes.cpp)
+
+ament_target_dependencies(
+  bt_nodes_lib 
+  rclcpp 
+  geometry_msgs 
+  behaviortree_cpp
+  tf2
+  tf2_geometry_msgs
+)
+
+#BehaviorTree executor
+add_executable(bt_executor_node src/bt_executor_node.cpp)
+
+target_link_libraries(bt_executor_node bt_nodes_lib)
+
+ament_target_dependencies(
+  bt_executor_node
+  rclcpp
+  geometry_msgs
+  nav_msgs
+  sensor_msgs
+  std_msgs
+  behaviortree_cpp
+  ament_index_cpp
+)
+
 
 install(
   TARGETS
   odom_node
   scan_node
   motion_node
+  bt_executor_node
+  bt_nodes_lib
   DESTINATION lib/${PROJECT_NAME}
+)
+
+install(
+  DIRECTORY 
+  bt_xml
+  include/
+  DESTINATION share/${PROJECT_NAME}
 )
 
 if(BUILD_TESTING)
