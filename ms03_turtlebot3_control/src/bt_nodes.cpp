@@ -35,13 +35,21 @@ BT::NodeStatus GoToPose::onRunning() {
   tf2::Matrix3x3(q).getRPY(r, p, yaw);
 
   double target_yaw = std::atan2(dy, dx);
+  
+  // ── Front-proximity speed damping ──────────────────────────
+  // If an obstacle is detected in front (e.g., < 0.6m), slow down
+  // significantly to give time for reactive steering to take effect.
+  double speed_factor = 1.0;
+  if (state_->front_dist < 0.60f) {
+    speed_factor = std::clamp(static_cast<double>(state_->front_dist) / 0.60, 0.1, 1.0);
+  }
 
   // ── Side-proximity heading bias ──────────────────────────
   // If either side is within 0.5m, bias heading 45° (π/4 rad) away
   // from the closer obstacle so the robot steers away gradually.
   //   Left obstacle  → steer right  → negative bias
   //   Right obstacle → steer left   → positive bias
-  constexpr float  SIDE_THRESHOLD = 0.20f;
+  constexpr float  SIDE_THRESHOLD = 0.30f;
   constexpr double BIAS_RAD       = M_PI / 4.0;  // 45°
   double heading_bias = 0.0;
 
@@ -63,8 +71,9 @@ BT::NodeStatus GoToPose::onRunning() {
 
   double biased_yaw  = target_yaw + heading_bias;
   double heading_err = std::atan2(std::sin(biased_yaw - yaw), std::cos(biased_yaw - yaw));
-
+  
   double v = std::clamp(0.4 * dist,        -0.22, 0.22);
+  v *= speed_factor; // Apply front-proximity damping
   double w = std::clamp(1.5 * heading_err, -1.0,  1.0);
 
   if (std::abs(heading_err) > 0.4) {
@@ -140,45 +149,28 @@ BT::NodeStatus TurnRecovery::onRunning() {
     ++ticks_;
     // publish zeros
     if (ticks_ >= 3) {
-      phase_  = Phase::REVERSING;
+      phase_  = Phase::ROTATING;
       ticks_  = 0;
-      RCLCPP_INFO(rclcpp::get_logger("TurnRecovery"), "[Recovery] → REVERSING");
+      RCLCPP_INFO(rclcpp::get_logger("TurnRecovery"), "[Recovery] → ROTATING");
     }
   }
 
-  // ── PHASE 1: REVERSING ─────────────────────────────────────
+  // ── PHASE 1: REVERSING (SKIPPED) ───────────────────────────
   else if (phase_ == Phase::REVERSING) {
-    ++ticks_;
-    cmd.twist.linear.x = -0.16;
-
-    bool behind_blocked  = (state_->back_dist  < 0.22f);
-    bool min_done        = (ticks_ >= 6);
-    bool max_done        = (ticks_ >= 18);
-    // Front cleared enough to start rotating
-    bool front_ok = (state_->front_dist >= 0.50f);
-
-    if (behind_blocked || max_done || (min_done && front_ok)) {
-      phase_        = Phase::ROTATING;
-      rotate_ticks_ = 0;
-      // Re-evaluate which side has more room now
-      turn_dir_ = (state_->left_dist >= state_->right_dist) ? 1.0f : -1.0f;
-      RCLCPP_INFO(rclcpp::get_logger("TurnRecovery"),
-        "[Recovery] → ROTATING %s | Front: %.2fm",
-        (turn_dir_ > 0) ? "LEFT" : "RIGHT", state_->front_dist);
-    }
+    phase_ = Phase::ROTATING;
   }
 
   // ── PHASE 2: ROTATING ─────────────────────────────────────
   else if (phase_ == Phase::ROTATING) {
     ++rotate_ticks_;
-    cmd.twist.angular.z = turn_dir_ * 0.7f;
+    cmd.twist.angular.z = turn_dir_ * 0.8f; // Slightly faster rotation
 
-    // 45° minimum @ 0.7 rad/s, 100ms tick = 0.07 rad/tick → ceil(0.785/0.07) = 12 ticks
-    bool min_done  = (rotate_ticks_ >= 12);
+    // 45° minimum @ 0.8 rad/s, 100ms tick = 0.08 rad/tick → ceil(0.785/0.08) = 10 ticks
+    bool min_done  = (rotate_ticks_ >= 10);
     bool max_done  = (rotate_ticks_ >= 45);
-    // Front clear threshold set above bypass re-trigger (0.22m)
-    bool front_ok  = (state_->front_dist >= 0.30f) &&
-                     (state_->left_dist  >= 0.20f || state_->right_dist >= 0.20f);
+    // Front clear threshold (0.30m as requested)
+    bool front_ok  = (state_->front_dist >= 0.40f) && 
+                     (state_->left_dist  >= 0.30f || state_->right_dist >= 0.30f);
 
     if (max_done || (min_done && front_ok)) {
       phase_        = Phase::BYPASS_STEP;
@@ -193,21 +185,41 @@ BT::NodeStatus TurnRecovery::onRunning() {
     ++bypass_ticks_;
     cmd.twist.linear.x = 0.18f;
 
-    if (state_->front_dist < 0.22f) {
+    if (state_->front_dist < 0.28f) {
       // Hit another obstacle during bypass — re-rotate
       phase_        = Phase::ROTATING;
       rotate_ticks_ = 0;
       turn_dir_     = (state_->left_dist >= state_->right_dist) ? 1.0f : -1.0f;
       RCLCPP_WARN(rclcpp::get_logger("TurnRecovery"),
         "[Recovery] Obstacle during bypass (%.2fm), re-rotating", state_->front_dist);
-    } else if (bypass_ticks_ >= 10) {
-      // Recovery complete — let BT return to GoToPose
-      state_->recovery_active  = false;
-      state_->obstacle_detected = false;
-      cmd_pub_->publish(cmd);   // publish final step
-      RCLCPP_INFO(rclcpp::get_logger("TurnRecovery"),
-        "[Recovery] COMPLETE — resuming navigation");
-      return BT::NodeStatus::SUCCESS;
+    } else {
+      // Determine if the obstacle we are bypassing has been cleared from our side.
+      // If we turned Left (turn_dir_ > 0), the obstacle is on our Right.
+      // If we turned Right (turn_dir_ < 0), the obstacle is on our Left.
+      bool side_blocked = false;
+      constexpr float SIDE_CLEAR_THRESHOLD = 0.38f; // Ensure side is clear before exiting
+
+      if (turn_dir_ > 0.0f) {
+        side_blocked = (state_->right_dist < SIDE_CLEAR_THRESHOLD);
+      } else {
+        side_blocked = (state_->left_dist < SIDE_CLEAR_THRESHOLD);
+      }
+
+      // We complete bypass if we have driven for at least a minimum time
+      // AND the side is now clear, OR we hit a safety timeout (max 35 ticks = 3.5s)
+      bool min_time_passed = (bypass_ticks_ >= 10);  // At least 1.0s to get moving
+      bool max_time_passed = (bypass_ticks_ >= 35);  // Hard limit 3.5s
+
+      if (max_time_passed || (min_time_passed && !side_blocked)) {
+        // Recovery complete — let BT return to GoToPose
+        state_->recovery_active  = false;
+        state_->obstacle_detected = false;
+        cmd_pub_->publish(cmd);   // publish final step
+        RCLCPP_INFO(rclcpp::get_logger("TurnRecovery"),
+          "[Recovery] COMPLETE — Obstacle cleared from side. Resuming navigation. L=%.2fm, R=%.2fm",
+          state_->left_dist, state_->right_dist);
+        return BT::NodeStatus::SUCCESS;
+      }
     }
   }
 

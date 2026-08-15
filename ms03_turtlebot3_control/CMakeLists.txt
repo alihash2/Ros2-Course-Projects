@@ -92,6 +92,7 @@ install(
   DIRECTORY 
   bt_xml
   include/
+  launch/
   DESTINATION share/${PROJECT_NAME}
 )
 

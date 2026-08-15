@@ -130,17 +130,17 @@ private:
       angle_rad = std::atan2(std::sin(angle_rad), std::cos(angle_rad)); // normalize to [-π,π]
       double deg = angle_rad * (180.0 / M_PI);
 
-      // Front: ±35° — robot nose
-      if (std::abs(deg) <= 35.0) {
+      // Front: ±45° — robot nose (widened for safer corner clearance)
+      if (std::abs(deg) <= 45.0) {
         if (r < min_front) min_front = r;
       }
-      // Right: +35° to +145° — true right side (ROS: CCW positive, right = +90°)
-      else if (deg > 35.0 && deg <= 145.0) {
-        if (r < min_right) min_right = r;
-      }
-      // Left: -35° to -145° — true left side (left = -90°)
-      else if (deg < -35.0 && deg >= -145.0) {
+      // Left: +45° to +125° — narrowed side field of view (left = +90°)
+      else if (deg > 45.0 && deg <= 125.0) {
         if (r < min_left) min_left = r;
+      }
+      // Right: -45° to -125° — narrowed side field of view (right = -90°)
+      else if (deg < -45.0 && deg >= -125.0) {
+        if (r < min_right) min_right = r;
       }
       // Back: ±145° to ±180°
       else if (std::abs(deg) > 145.0) {
@@ -155,7 +155,7 @@ private:
 
     // Only update obstacle_detected when NOT in recovery (recovery manages its own exit)
     // Always update obstacle_detected to ensure it remains reactive
-    state_->obstacle_detected = (min_front < 0.15f);
+    state_->obstacle_detected = (min_front < 0.30f);
   }
 
   void publishStop() {
