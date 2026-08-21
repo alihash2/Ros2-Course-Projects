@@ -1,0 +1,12 @@
+<library path="dynamic_obstacle_avoidance_lib">
+  <class name="dynamic_obstacle_avoidance/AStarPlannerPlugin" 
+         type="dynamic_obstacle_avoidance::AStarPlannerPlugin" 
+         base_class_type="nav2_core::GlobalPlanner">
+    <description>Custom A* Global Planner</description>
+  </class>
+  <class name="dynamic_obstacle_avoidance/RRTPlannerPlugin" 
+         type="dynamic_obstacle_avoidance::RRTPlannerPlugin" 
+         base_class_type="nav2_core::GlobalPlanner">
+    <description>Custom RRT Global Planner</description>
+  </class>
+</library>

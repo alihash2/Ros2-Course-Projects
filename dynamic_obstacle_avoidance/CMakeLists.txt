@@ -17,14 +17,21 @@ find_package(tf2_geometry_msgs REQUIRED)
 include_directories(include)
 
 #astarplanner
+# The core library
 add_library(dynamic_obstacle_avoidance_lib 
   src/astar_planner.cpp
   src/rrt_planner.cpp
+  src/astar_planner_plugin.cpp
+  src/rrt_planner_plugin.cpp
 )
 
 ament_target_dependencies(dynamic_obstacle_avoidance_lib
-rclcpp
-nav_msgs
+  rclcpp
+  nav_msgs
+  nav2_core
+  nav2_util
+  nav2_costmap_2d
+  pluginlib
 )
 
 
