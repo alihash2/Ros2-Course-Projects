@@ -49,6 +49,7 @@ bool RRTPlanner::is_path_clear(const std::vector<int>& grid, int width, Node fro
         double t = static_cast<double>(i) / steps;
         int x = static_cast<int>(from.x + t * (to.x - from.x));
         int y = static_cast<int>(from.y + t * (to.y - from.y));
+        if (x < 0 || x >= width || y < 0 || y >= static_cast<int>(grid.size() / width)) return false;
         if (grid[y * width + x] > 50) return false;
     }
     return true;

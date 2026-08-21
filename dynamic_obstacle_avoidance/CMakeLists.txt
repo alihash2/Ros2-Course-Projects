@@ -33,6 +33,16 @@ $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 $<INSTALL_INTERFACE:include>
 )
 
+# The Profiling Executable
+add_executable(profiling_node test/profiling_node.cpp)
+target_link_libraries(profiling_node dynamic_obstacle_avoidance_lib)
+ament_target_dependencies(profiling_node rclcpp nav_msgs)
+
+install(TARGETS
+  profiling_node
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights
