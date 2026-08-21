@@ -45,8 +45,19 @@ add_executable(profiling_node test/profiling_node.cpp)
 target_link_libraries(profiling_node dynamic_obstacle_avoidance_lib)
 ament_target_dependencies(profiling_node rclcpp nav_msgs)
 
+# The Path Follower Node
+add_executable(path_follower_node src/path_follower_node.cpp)
+target_link_libraries(path_follower_node dynamic_obstacle_avoidance_lib)
+ament_target_dependencies(path_follower_node
+  rclcpp
+  geometry_msgs
+  nav_msgs
+  tf2
+)
+
 install(TARGETS
   profiling_node
+  path_follower_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
