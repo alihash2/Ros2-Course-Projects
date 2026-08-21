@@ -16,6 +16,23 @@ find_package(tf2_geometry_msgs REQUIRED)
 
 include_directories(include)
 
+#astarplanner
+add_library(dynamic_obstacle_avoidance_lib 
+  src/astar_planner.cpp
+  src/rrt_planner.cpp
+)
+
+ament_target_dependencies(dynamic_obstacle_avoidance_lib
+rclcpp
+nav_msgs
+)
+
+
+target_include_directories(dynamic_obstacle_avoidance_lib PUBLIC
+$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+$<INSTALL_INTERFACE:include>
+)
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights
