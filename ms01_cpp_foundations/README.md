@@ -1,5 +1,7 @@
 A C++ mobile robot library providing simulated sensor outputs (Wheel Speeds, Odometry, and LiDAR) using modern C++17 and CMake.
 
+> This package is part of the [Ros2-Course-Projects](../README.md) repo — see the top-level README for workspace setup and cloning instructions.
+
 Directory Structure:
 * `include/` - Header declarations (`.hpp`) and data structures.
 * `src/` - Implementation of robot logic and sensor simulation.

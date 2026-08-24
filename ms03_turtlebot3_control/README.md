@@ -2,6 +2,8 @@
 
 This package implements a **Reactive Behavior Tree Controller** for the TurtleBot3 in ROS 2. It integrates odometry tracking, LIDAR-based obstacle checking, and motion control into a unified navigation framework.
 
+> This package is part of the [Ros2-Course-Projects](../README.md) repo — see the top-level README for workspace setup and cloning instructions.
+
 ---
 
 ## 🎯 The Big Picture Goal

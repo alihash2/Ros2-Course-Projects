@@ -2,6 +2,8 @@
 
 A ROS 2 C++ package implementing closed-loop proportional position and heading control for a mobile robot operating inside the `turtlesim` simulation environment.
 
+> This package is part of the [Ros2-Course-Projects](../README.md) repo — see the top-level README for workspace setup and cloning instructions.
+
 ---
 
 ## 1. Prerequisites & Dependencies
