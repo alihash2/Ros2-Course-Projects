@@ -36,6 +36,20 @@ void GoToPoseNode::poseCallback(const turtlesim::msg::Pose::SharedPtr msg)
     pose_received_ = true;
 }
 
+// Assign a new target pose at runtime and re-arm the goal-reached flag
+void GoToPoseNode::setTarget(double target_x, double target_y, double target_theta)
+{
+    target_x_ = target_x;
+    target_y_ = target_y;
+    target_theta_ = target_theta;
+    has_target_ = true;
+    goal_reached_ = false;
+
+    RCLCPP_INFO(this->get_logger(),
+        "New target set: (x=%.2f, y=%.2f, theta=%.2f rad)",
+        target_x_, target_y_, target_theta_);
+}
+
 // Helper: Keeps heading errors strictly within [-pi, +pi] radians
 double GoToPoseNode::normalizeAngle(double angle)
 {
@@ -45,8 +59,10 @@ double GoToPoseNode::normalizeAngle(double angle)
 // Core 30 Hz Proportional Control Loop
 void GoToPoseNode::controlLoop()
 {
-    // Guard check: Wait until first valid pose message arrives
-    if (!pose_received_) {
+    // Guard check: wait until a first pose arrives AND the app has assigned
+    // a real target. Without this the constructor's placeholder (0,0,0)
+    // would make the turtle drive off (and log "reached") at launch.
+    if (!pose_received_ || !has_target_) {
         return;
     }
 
@@ -79,7 +95,14 @@ void GoToPoseNode::controlLoop()
             cmd_vel.angular.z = 0.0;
             cmd_vel_pub_->publish(cmd_vel);
 
-            RCLCPP_INFO_ONCE(this->get_logger(), "Target pose successfully reached!");
+            // Announce arrival exactly once per target — the timer keeps
+            // ticking, so without this guard the log would repeat forever.
+            if (!goal_reached_) {
+                goal_reached_ = true;
+                RCLCPP_INFO(this->get_logger(),
+                    "Target pose successfully reached! (%.2f, %.2f, theta=%.2f)",
+                    target_x_, target_y_, target_theta_);
+            }
             return;
         }
     }

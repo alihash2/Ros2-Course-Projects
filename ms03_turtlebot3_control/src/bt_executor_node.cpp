@@ -18,6 +18,16 @@
 //   Front < 0.45m  => obstacle_detected = true => triggers TurnRecovery
 // =============================================================
 
+// =============================================================
+// Odometry frame offset:
+//   The ros_gz_bridge publishes /odom relative to the robot's spawn pose,
+//   so Gazebo/world (-2.0, -0.5) reads as (0,0) on /odom. All goals coming
+//   in on /user_goal are in WORLD coordinates and are converted with these
+//   constants before being handed to the behavior tree.
+// =============================================================
+constexpr double SPAWN_X = -2.0;  // world x of robot spawn (= odom origin)
+constexpr double SPAWN_Y = -0.5;  // world y of robot spawn (= odom origin)
+
 class BTExecutorNode : public rclcpp::Node {
 public:
   BTExecutorNode() : Node("bt_executor_node") {
@@ -43,13 +53,21 @@ public:
     cmd_pub_ = this->create_publisher<geometry_msgs::msg::TwistStamped>("/cmd_vel", 10);
 
     // 4. Live goal update at runtime
+    // NOTE: The gazebo bridge reports odometry in a frame whose origin is the
+    // robot's spawn point (-2.0, -0.5 in Gazebo/world coordinates), NOT the
+    // world origin. Goals from /user_goal are given in WORLD coordinates, so
+    // they are converted to ODOM coordinates here: odom = world - spawn.
     goal_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
       "/user_goal", 10,
       [this](const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
-        tree_.rootBlackboard()->set("target_pose", *msg);
+        geometry_msgs::msg::PoseStamped odom_goal = *msg;
+        odom_goal.pose.position.x = msg->pose.position.x - SPAWN_X;
+        odom_goal.pose.position.y = msg->pose.position.y - SPAWN_Y;
+        tree_.rootBlackboard()->set("target_pose", odom_goal);
         RCLCPP_INFO(this->get_logger(),
-          "[BT] Goal updated via /user_goal: x=%.2f, y=%.2f",
-          msg->pose.position.x, msg->pose.position.y);
+          "[BT] Goal updated via /user_goal (world): x=%.2f, y=%.2f -> odom: x=%.2f, y=%.2f",
+          msg->pose.position.x, msg->pose.position.y,
+          odom_goal.pose.position.x, odom_goal.pose.position.y);
       });
 
     // 5. Behavior Tree
@@ -95,13 +113,16 @@ public:
     tree_ = factory.createTreeFromFile(pkg + "/bt_xml/bt_recovery_tree.xml");
 
     geometry_msgs::msg::PoseStamped goal;
-    goal.header.frame_id = "map";
-    goal.pose.position.x = 10.0;
-    goal.pose.position.y = 7.0;
+    goal.header.frame_id = "odom";
+    // Hold position at startup: spawn point in WORLD coords == (0,0) in ODOM
+    // coords, so holding (0,0) keeps the robot exactly where it spawned until
+    // a real goal arrives on /user_goal.
+    goal.pose.position.x = 0.0;
+    goal.pose.position.y = 0.0;
     tree_.rootBlackboard()->set("target_pose", goal);
 
     RCLCPP_INFO(this->get_logger(),
-      "[BT] Ready. Default goal x=10.0, y=7.0. Publish to /user_goal to change.");
+      "[BT] Ready. Holding default spawn pose (-2.0, -0.5). Publish to /user_goal to move.");
 
     timer_ = this->create_wall_timer(
       std::chrono::milliseconds(100),

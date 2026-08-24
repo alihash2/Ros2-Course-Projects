@@ -7,6 +7,12 @@ class GoToPoseNode : public rclcpp::Node {
 public:
     GoToPoseNode(float target_x, float target_y, float target_theta);
 
+    // Assign a new target pose at runtime (used by the interactive menu app)
+    void setTarget(double target_x, double target_y, double target_theta);
+
+    // True once the turtle has reached the current target within tolerances
+    bool isGoalReached() const { return goal_reached_; }
+
 private:
     void poseCallback(const turtlesim::msg::Pose::SharedPtr msg);
     void controlLoop();
@@ -18,6 +24,10 @@ private:
 
     turtlesim::msg::Pose current_pose_;
     bool pose_received_{false};
+    // No target until the app explicitly assigns one — prevents the turtle
+    // from driving off at launch and prevents spurious "goal reached" logs.
+    bool has_target_{false};
+    bool goal_reached_{false};
 
     double target_x_;
     double target_y_;
