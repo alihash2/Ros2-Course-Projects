@@ -2,6 +2,8 @@
 
 A ROS 2 (Jazzy) package providing **custom Nav2 global planner plugins** (A\* and RRT) for the TurtleBot3 Waffle in the `turtlebot3_world` Gazebo environment, with full Nav2 stack integration, RViz visualization, and an interactive CLI navigation menu.
 
+> This package is part of the [Ros2-Course-Projects](../README.md) repo — see the top-level README for workspace setup and cloning instructions.
+
 ---
 
 ## 📦 What's Inside
