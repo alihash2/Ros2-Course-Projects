@@ -29,7 +29,7 @@ public:
             "/plan", 10, std::bind(&PathFollowerNode::path_callback, this, std::placeholders::_1));
         
         odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
-            "/odom", 10, std::bind(&PathFollowerNode::odom_callback, this, std::placeholders::_1));
+            "/odom", rclcpp::SensorDataQoS(), std::bind(&PathFollowerNode::odom_callback, this, std::placeholders::_1));
 
         // Publisher
         cmd_vel_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);

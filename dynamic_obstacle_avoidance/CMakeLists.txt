@@ -18,12 +18,13 @@ include_directories(include)
 
 #astarplanner
 # The core library
-add_library(dynamic_obstacle_avoidance_lib 
+add_library(dynamic_obstacle_avoidance_lib SHARED 
   src/astar_planner.cpp
   src/rrt_planner.cpp
   src/astar_planner_plugin.cpp
   src/rrt_planner_plugin.cpp
 )
+set_target_properties(dynamic_obstacle_avoidance_lib PROPERTIES OUTPUT_NAME "dynamic_obstacle_avoidance_lib")
 
 ament_target_dependencies(dynamic_obstacle_avoidance_lib
   rclcpp
@@ -55,10 +56,35 @@ ament_target_dependencies(path_follower_node
   tf2
 )
 
+# The CmdVelRelay Node
+add_executable(cmd_vel_relay src/cmd_vel_relay.cpp)
+ament_target_dependencies(cmd_vel_relay rclcpp geometry_msgs)
+
+install(TARGETS dynamic_obstacle_avoidance_lib
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+
 install(TARGETS
   profiling_node
   path_follower_node
+  cmd_vel_relay
   DESTINATION lib/${PROJECT_NAME}
+)
+
+# Install Python UI
+install(PROGRAMS
+  src/navigation_menu.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+# Install launch files and params
+install(DIRECTORY
+  launch
+  params
+  plugins
+  DESTINATION share/${PROJECT_NAME}
 )
 
 if(BUILD_TESTING)
@@ -72,5 +98,9 @@ if(BUILD_TESTING)
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 endif()
+
+# Register the plugin export
+ament_export_dependencies(nav2_core)
+pluginlib_export_plugin_description_file(nav2_core plugins/planner_plugin.xml)
 
 ament_package()
