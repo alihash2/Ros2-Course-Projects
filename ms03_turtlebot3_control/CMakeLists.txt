@@ -88,6 +88,12 @@ install(
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# Install Python goal menu
+install(PROGRAMS
+  scripts/goal_menu.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 install(
   DIRECTORY 
   bt_xml
