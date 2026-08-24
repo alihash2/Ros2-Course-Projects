@@ -1,24 +1,30 @@
 #include "dynamic_obstacle_avoidance/astar_planner.hpp"
 #include <cmath>
+#include <queue>
 #include <algorithm>
 #include <limits>
 
 namespace dynamic_obstacle_avoidance {
 
-struct SearchNode {
-    Node node;
-    double g_cost = 0.0;
-    double h_cost = 0.0;
+struct AStarNode {
+    int x;
+    int y;
+    double g_cost;
+    double h_cost;
 
     double f_cost() const { return g_cost + h_cost; }
+
+    bool operator>(const AStarNode& other) const {
+        return f_cost() > other.f_cost();
+    }
 };
 
-int to_index(int x, int y, int width) {
+static inline int to_index(int x, int y, int width) {
     return y * width + x;
 }
 
-double heuristic(Node node, Node goal) {
-    return std::sqrt(std::pow(goal.x - node.x, 2) + std::pow(goal.y - node.y, 2));
+static inline double euclidean_heuristic(int x1, int y1, int x2, int y2) {
+    return std::hypot(x2 - x1, y2 - y1);
 }
 
 std::vector<Node> AStarPlanner::plan(
@@ -29,90 +35,87 @@ std::vector<Node> AStarPlanner::plan(
     Node goal) 
 {
     std::vector<Node> path;
-    int map_size = width * height;
+    if (width <= 0 || height <= 0 || occupancy_grid.size() < static_cast<size_t>(width * height)) {
+        return path;
+    }
 
-    // 1. Setup memory
-    std::vector<bool> closed_list(map_size, false);
+    if (start.x < 0 || start.x >= width || start.y < 0 || start.y >= height ||
+        goal.x < 0 || goal.x >= width || goal.y < 0 || goal.y >= height) {
+        return path;
+    }
+
+    int map_size = width * height;
     std::vector<double> g_costs(map_size, std::numeric_limits<double>::infinity());
     std::vector<int> parent_ids(map_size, -1);
-    std::vector<SearchNode> open_list;
+    std::vector<bool> closed_list(map_size, false);
 
-    // 2. Initialize Start
-    SearchNode start_node;
-    start_node.node = start;
-    start_node.g_cost = 0.0;
-    start_node.h_cost = heuristic(start, goal);
+    std::priority_queue<AStarNode, std::vector<AStarNode>, std::greater<AStarNode>> open_queue;
 
     int start_idx = to_index(start.x, start.y, width);
     g_costs[start_idx] = 0.0;
-    open_list.push_back(start_node);
+    open_queue.push({start.x, start.y, 0.0, euclidean_heuristic(start.x, start.y, goal.x, goal.y)});
 
     bool found_goal = false;
-    int goal_idx = -1;
+    int goal_idx = to_index(goal.x, goal.y, width);
 
-    // 3. Main Loop
-    while (!open_list.empty()) {
-        // Sort to get best node at the back
-        std::sort(open_list.begin(), open_list.end(), [](const SearchNode& a, const SearchNode& b) {
-            return a.f_cost() > b.f_cost();
-        });
+    // Nav2 costmap obstacle threshold (253 = INSCRIBED_INFLATED, 254 = LETHAL, 255 = NO_INFO)
+    constexpr int OBSTACLE_THRESHOLD = 253;
 
-        SearchNode current = open_list.back();
-        open_list.pop_back();
+    while (!open_queue.empty()) {
+        AStarNode current = open_queue.top();
+        open_queue.pop();
 
-        int current_idx = to_index(current.node.x, current.node.y, width);
+        int curr_idx = to_index(current.x, current.y, width);
 
-        // Check if goal reached
-        if (current.node.x == goal.x && current.node.y == goal.y) {
+        if (closed_list[curr_idx]) continue;
+        closed_list[curr_idx] = true;
+
+        if (current.x == goal.x && current.y == goal.y) {
             found_goal = true;
-            goal_idx = current_idx;
             break;
         }
 
-        if (closed_list[current_idx]) continue;
-        closed_list[current_idx] = true;
-
-        // 4. Expand 8 Neighbors
         for (int dx = -1; dx <= 1; ++dx) {
             for (int dy = -1; dy <= 1; ++dy) {
                 if (dx == 0 && dy == 0) continue;
 
-                int nx = current.node.x + dx;
-                int ny = current.node.y + dy;
+                int nx = current.x + dx;
+                int ny = current.y + dy;
 
-                // Bounds check
                 if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
 
                 int n_idx = to_index(nx, ny, width);
+                int cell_cost = occupancy_grid[n_idx];
 
-                // Obstacle check (occupancy > 50 is obstacle)
-                if (occupancy_grid[n_idx] > 50 || closed_list[n_idx]) continue;
+                if (cell_cost >= OBSTACLE_THRESHOLD || closed_list[n_idx]) continue;
 
-                double move_cost = std::sqrt(dx * dx + dy * dy);
-                double new_g = current.g_cost + move_cost;
+                // Prevent diagonal corner cutting
+                if (dx != 0 && dy != 0) {
+                    int card1 = to_index(current.x + dx, current.y, width);
+                    int card2 = to_index(current.x, current.y + dy, width);
+                    if (occupancy_grid[card1] >= OBSTACLE_THRESHOLD || occupancy_grid[card2] >= OBSTACLE_THRESHOLD) {
+                        continue;
+                    }
+                }
+
+                double step_dist = (dx != 0 && dy != 0) ? 1.41421356 : 1.0;
+                double cost_penalty = (cell_cost > 0) ? (cell_cost / 254.0) * 2.0 : 0.0;
+                double new_g = current.g_cost + step_dist + cost_penalty;
 
                 if (new_g < g_costs[n_idx]) {
                     g_costs[n_idx] = new_g;
-                    parent_ids[n_idx] = current_idx;
-
-                    SearchNode neighbor;
-                    neighbor.node = {nx, ny};
-                    neighbor.g_cost = new_g;
-                    neighbor.h_cost = heuristic(neighbor.node, goal);
-                    open_list.push_back(neighbor);
+                    parent_ids[n_idx] = curr_idx;
+                    double h = euclidean_heuristic(nx, ny, goal.x, goal.y);
+                    open_queue.push({nx, ny, new_g, h});
                 }
             }
         }
     }
 
-    // 5. Reconstruct Path
     if (found_goal) {
         int trace_idx = goal_idx;
         while (trace_idx != -1) {
-            Node p;
-            p.x = trace_idx % width;
-            p.y = trace_idx / width;
-            path.push_back(p);
+            path.push_back({trace_idx % width, trace_idx / width});
             trace_idx = parent_ids[trace_idx];
         }
         std::reverse(path.begin(), path.end());

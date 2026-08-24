@@ -41,34 +41,62 @@ nav_msgs::msg::Path AStarPlannerPlugin::createPlan(const geometry_msgs::msg::Pos
     path.header.frame_id = global_frame_;
     path.header.stamp = clock_->now();
 
-    // 1. Get Costmap Data
-    auto costmap = costmap_ros_->getCostmap();
-    int w = static_cast<int>(costmap->getSizeInCellsX());
-    int h = static_cast<int>(costmap->getSizeInCellsY());
-    
-    std::vector<int> grid(w * h);
-    for(int i=0; i<w*h; ++i) {
-        grid[i] = static_cast<int>(costmap->getCharMap()[i]);
+    if (!costmap_ros_) {
+        return path;
     }
 
-    // 2. Call your Core Library
-    // In a real plugin, we would use costmap->worldToMap() to convert poses to grid coordinates.
-    // For this educational clean slate, we assume the input poses are already in grid units.
+    auto costmap = costmap_ros_->getCostmap();
+    if (!costmap) {
+        return path;
+    }
+
+    int w = static_cast<int>(costmap->getSizeInCellsX());
+    int h = static_cast<int>(costmap->getSizeInCellsY());
+
+    // Convert start and goal world coordinates to map grid coordinates
+    unsigned int start_x = 0, start_y = 0;
+    unsigned int goal_x = 0, goal_y = 0;
+
+    if (!costmap->worldToMap(start.pose.position.x, start.pose.position.y, start_x, start_y)) {
+        return path;
+    }
+
+    if (!costmap->worldToMap(goal.pose.position.x, goal.pose.position.y, goal_x, goal_y)) {
+        return path;
+    }
+
+    std::vector<int> grid(w * h);
+    const unsigned char* char_map = costmap->getCharMap();
+    for (int i = 0; i < w * h; ++i) {
+        grid[i] = static_cast<int>(char_map[i]);
+    }
+
     auto core_path = planner_core_->plan(
         grid, w, h, 
-        {(int)start.pose.position.x, (int)start.pose.position.y}, 
-        {(int)goal.pose.position.x, (int)goal.pose.position.y}
+        {static_cast<int>(start_x), static_cast<int>(start_y)}, 
+        {static_cast<int>(goal_x), static_cast<int>(goal_y)}
     );
 
-    // 3. Translate to ROS msg
-    for (auto& p : core_path) {
+    // Convert planned map grid points back to world coordinates
+    for (const auto& p : core_path) {
+        double wx = 0.0, wy = 0.0;
+        costmap->mapToWorld(static_cast<unsigned int>(p.x), static_cast<unsigned int>(p.y), wx, wy);
+
         geometry_msgs::msg::PoseStamped ps;
         ps.header.frame_id = global_frame_;
         ps.header.stamp = clock_->now();
-        ps.pose.position.x = static_cast<double>(p.x);
-        ps.pose.position.y = static_cast<double>(p.y);
+        ps.pose.position.x = wx;
+        ps.pose.position.y = wy;
+        ps.pose.position.z = 0.0;
+        ps.pose.orientation.w = 1.0;
         path.poses.push_back(ps);
     }
+
+    // Preserve orientation for final goal pose if path is non-empty
+    if (!path.poses.empty()) {
+        path.poses.back().pose.orientation = goal.pose.orientation;
+    }
+
     return path;
 }
 
