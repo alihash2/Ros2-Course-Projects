@@ -20,4 +20,5 @@ class ScanNode : public rclcpp::Node
 
         bool is_path_blocked_;
         bool is_path_clear_;
+        bool was_blocked_{false};
 };

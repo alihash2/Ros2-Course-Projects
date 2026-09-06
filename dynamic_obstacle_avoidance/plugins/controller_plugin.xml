@@ -1,0 +1,7 @@
+<library path="dynamic_obstacle_avoidance_lib">
+  <class name="dynamic_obstacle_avoidance/PidLqrController"
+         type="dynamic_obstacle_avoidance::PidLqrController"
+         base_class_type="nav2_core::Controller">
+    <description>Custom PID Heading + LQR Velocity local controller</description>
+  </class>
+</library>

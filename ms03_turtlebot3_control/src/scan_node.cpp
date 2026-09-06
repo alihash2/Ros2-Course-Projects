@@ -73,15 +73,16 @@ void ScanNode::scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
         is_path_clear_ = true;
     }
 
-    std::string front_str = (min_front_dist == std::numeric_limits<double>::infinity()) ? "CLEAR" : std::to_string(min_front_dist).substr(0,4) + "m";
-    std::string left_str = (min_left_dist == std::numeric_limits<double>::infinity()) ? "CLEAR" : std::to_string(min_left_dist).substr(0,4) + "m";
-    std::string right_str = (min_right_dist == std::numeric_limits<double>::infinity()) ? "CLEAR" : std::to_string(min_right_dist).substr(0,4) + "m";
-
-    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1500, 
-    "[SCAN NODE] Front: [%s] | Left: [%s] | Right: [%s] | Path: %s",
-    front_str.c_str(), left_str.c_str(), right_str.c_str(),
-    is_path_blocked_ ? "BLOCKED!" : "CLEAR"
-    );
+    // Log ONLY state transitions: entering recovery (blocked) and back to
+    // clear. No per-scan logging — that flooded the launch terminal.
+    if (is_path_blocked_ && !was_blocked_) {
+        RCLCPP_WARN(this->get_logger(),
+            "[SCAN NODE] Path BLOCKED — robot entering recovery mode!");
+    } else if (!is_path_blocked_ && was_blocked_) {
+        RCLCPP_INFO(this->get_logger(),
+            "[SCAN NODE] Path CLEAR — recovery complete, resuming navigation.");
+    }
+    was_blocked_ = is_path_blocked_;
 
 }
 

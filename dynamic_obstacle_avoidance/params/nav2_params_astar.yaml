@@ -73,17 +73,18 @@ controller_server:
     failure_tolerance: 0.3
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["general_goal_checker"]
-    controller_plugins: ["FollowPath"]
+    controller_plugins: ["FollowPath", "DWBPath", "PidLqrPath"]
     use_realtime_priority: false
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
       required_movement_radius: 0.5
-      movement_time_allowance: 10.0
+      movement_time_allowance: 5.0
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.25
       yaw_goal_tolerance: 0.25
+      symmetric_yaw_tolerance: True
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
       time_steps: 56
@@ -170,6 +171,66 @@ controller_server:
         threshold_to_consider: 0.5
         max_angle_to_furthest: 1.0
         mode: 0
+    DWBPath:
+      plugin: "dwb_core::DWBLocalPlanner"
+      min_vel_x: 0.0
+      min_vel_y: 0.0
+      max_vel_x: 0.5
+      max_vel_y: 0.0
+      max_vel_theta: 1.9
+      min_speed_xy: 0.0
+      max_speed_xy: 0.5
+      min_speed_theta: 0.0
+      acc_lim_x: 2.5
+      acc_lim_y: 0.0
+      acc_lim_theta: 3.2
+      decel_lim_x: -2.5
+      decel_lim_y: 0.0
+      decel_lim_theta: -3.2
+      vx_samples: 20
+      vy_samples: 0
+      vtheta_samples: 20
+      sim_time: 1.7
+      sim_granularity: 0.025
+      vx_sample_resolution: 0.05
+      vy_sample_resolution: 0.05
+      vtheta_sample_resolution: 0.05
+      controller_frequency: 20.0
+      oscillation_reset_dist: 0.05
+      prune_plan: true
+      transform_tolerance: 0.1
+      trans_stopped_vel: 0.1
+      short_circuit_trajectory_evaluation: true
+      trajectory_generator_name: "dwb_plugins::StandardTrajectoryGenerator"
+      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
+      BaseObstacleCritic:
+        scale: 1.5
+        repulsion_weight: 1.5
+        critical_cost: 253
+      GoalAlignCritic:
+        scale: 24.0
+      GoalDistCritic:
+        scale: 24.0
+      OscillationCritic:
+        scale: 0.0
+      PathAlignCritic:
+        scale: 32.0
+        max_path_occupancy_ratio: 0.05
+      PathDistCritic:
+        scale: 32.0
+      RotateToGoalCritic:
+        scale: 32.0
+    PidLqrPath:
+      plugin: "dynamic_obstacle_avoidance/PidLqrController"
+      kp_angular: 2.0
+      ki_angular: 0.0
+      kd_angular: 0.1
+      lqr_k1: 1.5
+      lqr_k2: 0.5
+      target_linear_velocity: 0.22
+      final_approach_tolerance: 0.15
+      yaw_align_tolerance: 0.08
+      kp_final_yaw: 2.5
 
 local_costmap:
   local_costmap:
@@ -182,12 +243,12 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
-      robot_radius: 0.22
+      robot_radius: 0.18
       plugins: ["voxel_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.70
+        cost_scaling_factor: 5.0
+        inflation_radius: 0.40
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
@@ -220,7 +281,7 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_link
-      robot_radius: 0.22
+      robot_radius: 0.18
       resolution: 0.05
       track_unknown_space: true
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
@@ -243,17 +304,19 @@ global_costmap:
         map_subscribe_transient_local: True
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.7
+        cost_scaling_factor: 5.0
+        inflation_radius: 0.4
       always_send_full_costmap: True
 
 planner_server:
   ros__parameters:
     expected_planner_frequency: 20.0
-    planner_plugins: ["GridBased"]
+    planner_plugins: ["GridBased", "RRTBased"]
     costmap_update_timeout: 1.0
     GridBased:
       plugin: "dynamic_obstacle_avoidance/AStarPlannerPlugin"
+    RRTBased:
+      plugin: "dynamic_obstacle_avoidance/RRTPlannerPlugin"
 
 smoother_server:
   ros__parameters:

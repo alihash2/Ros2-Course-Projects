@@ -38,6 +38,7 @@ sudo apt install -y ros-$ROS_DISTRO-turtlesim ros-$ROS_DISTRO-geometry-msgs ros-
 ```
 
 ## 3. Building the Package
+## 🔨 Build
 
 ```bash
 cd ~/ros2_ws
@@ -45,14 +46,44 @@ colcon build --packages-select ms02_mobile_robot_control
 source install/setup.bash
 ```
 
+> **Every new terminal must source the workspace before running anything:**
+> ```bash
+> source ~/ros2_ws/install/setup.bash
+> ```
+
+## 📋 Quick start (copy-paste these commands in order)
+
+1. Build the package:
+   ```bash
+   cd ~/ros2_ws
+   colcon build --packages-select ms02_mobile_robot_control
+   source install/setup.bash
+   ```
+
+2. Launch turtlesim:
+   ```bash
+   source ~/ros2_ws/install/setup.bash
+   ros2 run turtlesim turtlesim_node
+   ```
+
+3. In a new terminal, launch the interactive menu:
+   ```bash
+   source ~/ros2_ws/install/setup.bash
+   ros2 run ms02_mobile_robot_control goto_pose_app
+   ```
+
+---
+
 ## 4. Running the Interactive Control App (Recommended)
 
 1. **Terminal 1** — launch turtlesim:
    ```bash
+   source ~/ros2_ws/install/setup.bash
    ros2 run turtlesim turtlesim_node
    ```
 2. **Terminal 2** — launch the interactive menu:
    ```bash
+   source ~/ros2_ws/install/setup.bash
    ros2 run ms02_mobile_robot_control goto_pose_app
    ```
 
@@ -81,7 +112,7 @@ Select option [1-2]:
 ### Behavior notes (important)
 
 - **No movement at launch.** The turtle stays exactly where turtlesim spawns it (~5, 5) until you send your first pose — the app does not drive it to (0, 0).
-- **"Goal reached" prints exactly once per pose command**, both in the menu (`[SUCCESS] Turtle reached the target pose!`) and in the node log (`Target pose successfully reached!`). No infinite log scrolling while the turtle sits at the goal.
+- **"Goal reached" prints exactly once per user-inputted pose command** (both in the menu and node logs). After the turtle reaches the goal, the menu immediately asks "Send another pose or exit?" — no repeated "goal reached" messages or log scrolling. The `has_target_` flag prevents the node from driving or logging at launch, and `goal_reached_` ensures the "goal reached" message fires only once per command.
 
 ### Example session
 
@@ -99,6 +130,7 @@ Navigating to (9.0, 9.0, theta=0.78)...
 You can still pass a target directly as arguments; the turtle will go there and the program exits when done:
 
 ```bash
+source ~/ros2_ws/install/setup.bash
 ros2 run ms02_mobile_robot_control goto_pose_app 9.0 9.0 0.78
 ```
 

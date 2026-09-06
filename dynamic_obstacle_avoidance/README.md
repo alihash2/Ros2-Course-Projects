@@ -1,26 +1,27 @@
 # Dynamic Obstacle Avoidance (`dynamic_obstacle_avoidance`)
 
-A ROS 2 (Jazzy) package providing **custom Nav2 global planner plugins** (A\* and RRT) for the TurtleBot3 Waffle in the `turtlebot3_world` Gazebo environment, with full Nav2 stack integration, RViz visualization, and an interactive CLI navigation menu.
+ROS 2 (Jazzy) package providing **custom Nav2 global planner plugins** (A* and RRT) for TurtleBot3 Waffle in `turtlebot3_world` Gazebo environment, with full Nav2 stack integration, RViz visualization, and an interactive CLI navigation menu.
 
 > This package is part of the [Ros2-Course-Projects](../README.md) repo — see the top-level README for workspace setup and cloning instructions.
 
 ---
 
-## 📦 What's Inside
+## Components
 
 | Component | Description |
-|---|---|
-| `src/astar_planner.cpp` / `astar_planner_plugin.cpp` | A\* global planner as a `nav2_core::GlobalPlanner` plugin |
-| `src/rrt_planner.cpp` / `rrt_planner_plugin.cpp` | RRT global planner plugin |
-| `src/cmd_vel_relay.cpp` | Relays Nav2's `TwistStamped` to the `/cmd_vel` topic Gazebo expects |
-| `src/path_follower_node.cpp` | Optional custom PID/LQR path follower (`enable_custom_follower:=true`) |
-| `src/navigation_menu.py` | Interactive CLI mission-control menu (Nav2 Simple Commander) |
+|-----------|-------------|
+| `astar_planner.cpp` / `astar_planner_plugin.cpp` | A* global planner as `nav2_core::GlobalPlanner` plugin |
+| `rrt_planner.cpp` / `rrt_planner_plugin.cpp` | RRT global planner plugin |
+| `cmd_vel_relay.cpp` | Relays Nav2's `TwistStamped` to `/cmd_vel` for Gazebo |
+| `path_follower_node.cpp` | Legacy standalone PID/LQR follower (replaced by the `PidLqrController` plugin; kept for reference) |
+| `pid_lqr_controller.cpp` | PID heading + LQR velocity **Nav2 controller plugin** (`dynamic_obstacle_avoidance/PidLqrController`) - switchable at runtime |
+| `navigation_menu.py` | Interactive CLI mission-control menu (Nav2 Simple Commander) |
 | `params/` | Nav2 parameter files (`nav2_params_astar.yaml` default, plus RRT variant) |
 | `launch/navigation.launch.py` | One-command launch of Gazebo + Nav2 + RViz |
 
 ---
 
-## ✅ Prerequisites
+## Prerequisites
 
 ```bash
 sudo apt update
@@ -29,92 +30,151 @@ sudo apt install ros-$ROS_DISTRO-turtlebot3-gazebo \
                  ros-$ROS_DISTRO-nav2-simple-commander -y
 ```
 
-## 🔨 Build
+---
+
+## Workspace Setup & Build
 
 ```bash
+# 1. Create workspace and clone
+mkdir -p ~/ros2_ws/src
+cd ~/ros2_ws/src
+git clone https://github.com/alihash2/Ros2-Course-Projects.git
+
+# 2. Build the package
 cd ~/ros2_ws
 colcon build --packages-select dynamic_obstacle_avoidance
 source install/setup.bash
 ```
 
+> **Every new terminal must source the workspace:**
+> ```bash
+> source ~/ros2_ws/install/setup.bash
+> ```
+
 ---
 
-## 🚀 Running
+## Running
 
-### Terminal 1 — Launch the simulation + Nav2 + RViz
+### Terminal 1 — Launch Simulation + Nav2 + RViz
 
 ```bash
+cd ~/ros2_ws
+source install/setup.bash
 ros2 launch dynamic_obstacle_avoidance navigation.launch.py
 ```
 
 This starts:
-- **Gazebo** with the TurtleBot3 Waffle in `turtlebot3_world` (default spawn pose: **x = -2.0, y = -0.5**)
-- **Nav2** (AMCL, planners, controller, behaviors) using this package's params
-- **RViz** with the standard Nav2 view
-- The `cmd_vel_relay` node
+- Gazebo with TurtleBot3 Waffle in `turtlebot3_world` (spawn: -2.0, -0.5)
+- Nav2 (AMCL, planners, controller, behaviors) with this package's params
+- RViz with standard Nav2 view
+- `cmd_vel_relay` node
 
-### Automatic localization at spawn (no manual 2D Pose Estimate needed)
+**Auto-localization**: AMCL is configured with `set_initial_pose: true` at the spawn location (-2.0, -0.5). Robot is localized on map when RViz opens — no manual "2D Pose Estimate" needed.
 
-AMCL is configured with `set_initial_pose: true` and the initial pose hardcoded to the robot's default spawn location `(-2.0, -0.5)` in all param files. When RViz opens, the robot is already localized on the map — **you do not need to press "2D Pose Estimate"**.
-
-### Terminal 2 — Launch the interactive navigation menu
+### Terminal 2 — Interactive Navigation Menu
 
 ```bash
+cd ~/ros2_ws
+source install/setup.bash
 ros2 run dynamic_obstacle_avoidance navigation_menu.py
 ```
 
 The menu:
-
-1. Sets the initial pose to the default spawn location `(-2.0, -0.5)` via Nav2 Simple Commander.
-2. Waits until Nav2 is fully active.
+1. Sets initial pose to spawn location (-2.0, -0.5)
+2. Waits for Nav2 to activate
 3. Presents options:
-   - **1 — Send Goal**: enter target X and Y. **Every coordinate is validated against the live global costmap before the robot moves** (see below). If valid, the path is computed with the selected planner and the robot navigates there, showing live distance-to-goal feedback. The menu also shows current position and current goal at all times, and prints `>>> GOAL REACHED! <<<` once when the robot arrives.
-   - **2 — Emergency Stop**: cancels the active navigation task.
-   - **3 — Exit**: closes the menu **and shuts down Gazebo, RViz, Nav2 and the launch terminal automatically** — no Ctrl+C needed in Terminal 1.
-
-### 🛡️ Goal validation & limits
-
-The world walls are irregular, so instead of a hard-coded square limit the menu checks every entered goal against the **live `/global_costmap/costmap`** and rejects it with an explicit reason if:
-
-- it lies **outside the map** (beyond the enclosed world walls) — the menu prints the actual map bounds from the costmap;
-- the spot is occupied by an **obstacle or wall** (lethal cost cell, including its immediate neighbours so goals hugging obstacles are rejected too);
-- the spot is in **unknown/unexplored space**.
-
-As a rough guide while typing, the menu suggests the safe range of about **−2 to +2 on X and Y around the origin**, but the costmap check is the real authority — a goal like `(3.5, 0.1)` inside a wall will be rejected with `[REJECTED] ... outside the map!` before anything moves.
-
-### Useful launch arguments
-
-```bash
-# Use the RRT planner instead of A*
-ros2 launch dynamic_obstacle_avoidance navigation.launch.py params_file:=<path>/nav2_params_rrt.yaml
-
-# Run the custom PID/LQR path follower instead of the Nav2 controller
-ros2 launch dynamic_obstacle_avoidance navigation.launch.py enable_custom_follower:=true
-
-# Use a different map
-ros2 launch dynamic_obstacle_avoidance navigation.launch.py map:=/path/to/map.yaml
+```
+  1. Send Goal
+  2. Emergency Stop
+  3. Switch Global Planner
+  4. Switch Local Planner
+  5. Exit
 ```
 
-### Manual goal publishing (optional)
+**Coordinates**: Enter X and Y in WORLD frame (map center = 0,0). Every goal is validated against the live global costmap before the robot moves.
 
-You can still send goals without the menu:
+**Global Planner switching** (runtime):
+- **A*** (`dynamic_obstacle_avoidance/AStarPlannerPlugin`) - optimal grid search
+- **RRT** (`dynamic_obstacle_avoidance/RRTPlannerPlugin`) - random sampling
+
+**Local Planner switching** (runtime):
+- **MPPI** (`nav2_mppi_controller::MPPIController`) - sampling-based MPC, costmap-aware obstacle avoidance
+- **DWB** (`dwb_core::DWBLocalPlanner`) - Dynamic Window Approach, sampling-based local planner
+- **PID+LQR** (`dynamic_obstacle_avoidance/PidLqrController`) - pure-pursuit style PID heading + LQR velocity tracking (no costmap-aware avoidance; fast, simple path following)
+
+The menu shows the currently active planners in the status header.
+
+**How runtime switching works**: the menu publishes the selected plugin ID to the `/planner_selector` and `/controller_selector` topics (`std_msgs/String`, **latched / transient-local** QoS). The BT nodes `PlannerSelector` / `ControllerSelector` in Nav2's default behavior tree subscribe to these topics and switch the plugins used for each mission. All candidate plugins must be listed in `planner_plugins` / `controller_plugins` so they are loaded at startup and selectable at runtime. (Note: Nav2 Jazzy does **not** expose `nav2_msgs/srv/ChangePlugin`.)
+
+> DWB plugin type is `dwb_core::DWBLocalPlanner`. A wrong type string made `controller_server` crash at startup, which previously broke RViz control and auto-localization — if you edit `params/*.yaml`, keep the plugin IDs above exactly.
+
+**Validation checks** (rejected with reason):
+- Outside map bounds (beyond enclosed world walls)
+- On obstacle/wall (lethal cost cell or neighbors)
+- In unknown/unexplored space
+
+**Emergency Stop**: Press **2 at any time** — including *while a mission is running*. It cancels the active navigation goal and publishes zero velocity to `/cmd_vel` immediately. The mission loop keeps polling the keyboard, so you don't need to wait for the goal to finish to stop the robot. (3/4/5 also work mid-mission: they pre-select the planner for the next goal or exit.)
+
+**Exit**: Shuts down Gazebo, RViz, Nav2, and launch terminal automatically.
+
+---
+
+## Launch Arguments
 
 ```bash
+# Use RRT planner instead of A*
+ros2 launch dynamic_obstacle_avoidance navigation.launch.py params_file:=<path>/nav2_params_rrt.yaml
+
+# Use different map
+ros2 launch dynamic_obstacle_avoidance navigation.launch.py map:=/path/to/map.yaml
+
+# Legacy: run the standalone PID/LQR follower (NOT recommended - use the plugin instead)
+ros2 launch dynamic_obstacle_avoidance navigation.launch.py enable_custom_follower:=true
+```
+
+Both `nav2_params_astar.yaml` and `nav2_params_rrt.yaml` now configure both global planners (A\* and RRT) and three local controllers (MPPI, DWB and PID+LQR), so they can be switched at runtime from the menu. The default behavior tree keeps **A\* (`GridBased`) + MPPI (`FollowPath`)** as the startup default — identical to the original working setup.
+
+---
+
+## Manual Goal Publishing (Alternative)
+
+```bash
+source ~/ros2_ws/install/setup.bash
 ros2 topic pub /goal_pose geometry_msgs/msg/PoseStamped \
   "{header: {frame_id: 'map'}, pose: {position: {x: 2.0, y: 1.0}}}" --once
 ```
 
 ---
 
-## 🗺️ World & Spawn Reference
+## Coordinate Frames
 
-- **World:** `turtlebot3_world` — roughly bounded by **X: -4..+4**, **Y: -4..+4** around the origin; practically navigable range is about **±2 m** from the origin due to irregular walls and obstacles (enforced per-goal via the costmap check).
-- **Default spawn pose:** `(-2.0, -0.5)`, yaw 0.
-- AMCL initial pose and the menu's initial pose both match this spawn location automatically.
+| Frame | Robot Spawn | World Origin (map center) |
+|-------|-------------|---------------------------|
+| **WORLD / what you type** | `(-2.0, -0.5)` | `(0, 0)` |
+| **Odom (`/odom` raw)** | `(0, 0)` | `(2.0, 0.5)` |
 
-## 🧠 How It Works
+The menu works in WORLD coordinates. Conversion: `world = odom + spawn`.
 
-- The custom planner plugins are loaded through `pluginlib` (see `plugins/planner_plugin.xml`) and selected in the Nav2 params under `planner_server`.
-- Plans are computed on the global costmap inflated from the static map + live obstacles; the controller server tracks the path while avoiding dynamic obstacles.
-- `cmd_vel_relay` bridges Nav2's `TwistStamped` output onto the plain `Twist` `/cmd_vel` topic consumed by the Gazebo diff-drive bridge.
-- The menu's goal validation subscribes to `/global_costmap/costmap` (`OccupancyGrid`) and converts world coordinates → grid cells using the map's origin/resolution, rejecting lethal (>90 occupancy) and unknown (-1) cells plus their 8-neighbourhood.
+---
+
+## Troubleshooting
+
+### Costmap not received / DDS port errors
+
+If menu shows `costmap not received yet` or DDS port errors:
+
+1. **Sourcing** — Run `source ~/ros2_ws/install/setup.bash` in **every** terminal
+2. **Folder structure** — Packages should be directly in `src/` (e.g., `~/ros2_ws/src/dynamic_obstacle_avoidance/`)
+3. **ROS_DOMAIN_ID** — All terminals must share same domain ID (default 0). Check: `echo $ROS_DOMAIN_ID`
+4. **ROS_LOCALHOST_ONLY** — Set `export ROS_LOCALHOST_ONLY=1` on VPNs/firewalls/multi-host setups
+5. **Timing** — Wait 2-3 seconds after Nav2 starts for costmap to become available
+
+**Quick check**: Run `ros2 node list` in both terminals. If menu terminal only shows `navigation_menu` but sim terminal shows Nav2 nodes, sourcing is missing in menu terminal.
+
+---
+
+## World & Spawn Reference
+
+- **World**: `turtlebot3_world` — roughly bounded by X: -4..+4, Y: -4..+4; practically navigable ±2 m from origin
+- **Default spawn**: `(-2.0, -0.5)`, yaw 0
+- AMCL initial pose and menu initial pose both match spawn automatically

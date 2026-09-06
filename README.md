@@ -73,14 +73,32 @@ mkdir -p ~/ros2_ws/src
 cd ~/ros2_ws/src
 ```
 
-### 3. Clone this repository into `src`
+### 3. Clone this repository so the packages land directly in `src`
+
+The repo contains the package folders at its top level, so clone it **directly into** `src/` (note the `.` at the end — that makes the package folders sit right inside `src/`, exactly where colcon expects them):
 
 ```bash
 cd ~/ros2_ws/src
-git clone https://github.com/alihash2/Ros2-Course-Projects.git
+git clone https://github.com/alihash2/Ros2-Course-Projects.git .
 ```
 
-> Because the clone lands inside `src/`, colcon will discover every package automatically — no extra setup needed.
+Resulting layout:
+
+```
+~/ros2_ws/src/
+├── ms01_cpp_foundations/
+├── ms02_mobile_robot_control/
+├── ms03_turtlebot3_control/
+├── dynamic_obstacle_avoidance/
+└── README.md
+```
+
+> If you already cloned it as a subfolder (`src/Ros2-Course-Projects/<packages>`), colcon will still find the packages (it searches recursively) — but the clean layout above is recommended. To fix a nested clone:
+> ```bash
+> cd ~/ros2_ws/src
+> mv Ros2-Course-Projects/* Ros2-Course-Projects/.[!.]* . 2>/dev/null
+> rmdir Ros2-Course-Projects
+> ```
 
 ### 4. Source ROS 2 and install common dependencies
 
@@ -115,6 +133,18 @@ colcon build --packages-select <package_name>
 source install/setup.bash
 ```
 
+> **Golden rule: source before running, in EVERY terminal.**
+> ```bash
+> source ~/ros2_ws/install/setup.bash
+> ```
+> **Golden rule: source ~/ros2_ws/install/setup.bash** in every new terminal before running anything.
+> Add it to your `~/.bashrc` to never forget:
+> ```bash
+echo "source ~/ros2_ws/install/setup.bash" >> ~/.bashrc
+> ```
+
+> **Quick reminder:** Every time you open a new terminal (for sim, menu, or any package), run `source ~/ros2_ws/install/setup.bash` **before** any `ros2` command (e.g., `ros2 run`, `ros2 launch`, `ros2 topic pub`). This ensures your workspace packages are discoverable.
+
 ### 6. Run a package
 
 Each package is independent — pick the one you want and follow its README:
@@ -126,9 +156,12 @@ Each package is independent — pick the one you want and follow its README:
 Quick example (ms02):
 
 ```bash
+source ~/ros2_ws/install/setup.bash
+
 # Terminal 1
 ros2 run turtlesim turtlesim_node
-# Terminal 2
+
+# Terminal 2 (also source first!)
 ros2 run ms02_mobile_robot_control goto_pose_app
 ```
 

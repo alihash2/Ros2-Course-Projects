@@ -10,8 +10,13 @@ find_package(rclcpp REQUIRED)
 find_package(ament_cmake REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(nav2_msgs REQUIRED)
 find_package(nav2_core REQUIRED)
+find_package(nav2_costmap_2d REQUIRED)
+find_package(nav2_util REQUIRED)
 find_package(pluginlib REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 
 include_directories(include)
@@ -23,6 +28,7 @@ add_library(dynamic_obstacle_avoidance_lib SHARED
   src/rrt_planner.cpp
   src/astar_planner_plugin.cpp
   src/rrt_planner_plugin.cpp
+  src/pid_lqr_controller.cpp
 )
 set_target_properties(dynamic_obstacle_avoidance_lib PROPERTIES OUTPUT_NAME "dynamic_obstacle_avoidance_lib")
 
@@ -30,9 +36,11 @@ ament_target_dependencies(dynamic_obstacle_avoidance_lib
   rclcpp
   nav_msgs
   nav2_core
-  nav2_util
   nav2_costmap_2d
+  nav2_util
   pluginlib
+  tf2
+  tf2_ros
 )
 
 
@@ -102,5 +110,6 @@ endif()
 # Register the plugin export
 ament_export_dependencies(nav2_core)
 pluginlib_export_plugin_description_file(nav2_core plugins/planner_plugin.xml)
+pluginlib_export_plugin_description_file(nav2_core plugins/controller_plugin.xml)
 
 ament_package()
