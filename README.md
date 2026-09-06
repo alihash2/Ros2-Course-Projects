@@ -1,6 +1,6 @@
 # ROS 2 Course Projects
 
-AA collection of ROS 2 (Jazzy) packages built as course projects, covering everything from C++ fundamentals to behavior-tree robot control and custom Nav2 planner plugins.
+A collection of ROS 2 (Jazzy) packages built as course projects, covering everything from C++ fundamentals to behavior-tree robot control and custom Nav2 planner plugins.
 
 ---
 
