@@ -27,7 +27,8 @@ ROS 2 (Jazzy) package providing **custom Nav2 global planner plugins** (A* and R
 sudo apt update
 sudo apt install ros-$ROS_DISTRO-turtlebot3-gazebo \
                  ros-$ROS_DISTRO-nav2-bringup \
-                 ros-$ROS_DISTRO-nav2-simple-commander -y
+                 ros-$ROS_DISTRO-nav2-simple-commander \
+                 ros-$ROS_DISTRO-ros-gz-bridge -y
 ```
 
 ---
@@ -68,6 +69,8 @@ This starts:
 - Nav2 (AMCL, planners, controller, behaviors) with this package's params
 - RViz with standard Nav2 view
 - `cmd_vel_relay` node
+
+> **`/clock`**: `turtlebot3_gazebo` (Jazzy) already bridges Gazebo's clock via its `parameter_bridge`, so Nav2's sim-time nodes (lifecycle, costmaps, timers) advance out of the box. You can force a second bridge with `enable_clock_bridge:=true` **only** if your `turtlebot3_gazebo` version does not provide `/clock` — otherwise two `/clock` publishers make the sim clock jump back in time and flood TF with "Detected jump back in time" (clearing the buffer and making AMCL drop scans).
 
 **Auto-localization**: AMCL is configured with `set_initial_pose: true` at the spawn location (-2.0, -0.5). Robot is localized on map when RViz opens — no manual "2D Pose Estimate" needed.
 
@@ -130,6 +133,9 @@ ros2 launch dynamic_obstacle_avoidance navigation.launch.py map:=/path/to/map.ya
 
 # Legacy: run the standalone PID/LQR follower (NOT recommended - use the plugin instead)
 ros2 launch dynamic_obstacle_avoidance navigation.launch.py enable_custom_follower:=true
+
+# Only if your turtlebot3_gazebo version lacks a /clock bridge (see note above)
+ros2 launch dynamic_obstacle_avoidance navigation.launch.py enable_clock_bridge:=true
 ```
 
 Both `nav2_params_astar.yaml` and `nav2_params_rrt.yaml` now configure both global planners (A\* and RRT) and three local controllers (MPPI, DWB and PID+LQR), so they can be switched at runtime from the menu. The default behavior tree keeps **A\* (`GridBased`) + MPPI (`FollowPath`)** as the startup default — identical to the original working setup.

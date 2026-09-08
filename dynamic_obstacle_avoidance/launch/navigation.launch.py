@@ -19,6 +19,7 @@ def generate_launch_description():
     model = LaunchConfiguration('model', default='waffle')
     map_yaml = LaunchConfiguration('map', default='/opt/ros/jazzy/share/nav2_bringup/maps/tb3_sandbox.yaml')
     enable_custom_follower = LaunchConfiguration('enable_custom_follower', default='false')
+    enable_clock_bridge = LaunchConfiguration('enable_clock_bridge', default='false')
 
     return LaunchDescription([
         SetEnvironmentVariable('TURTLEBOT3_MODEL', model),
@@ -34,6 +35,13 @@ def generate_launch_description():
         DeclareLaunchArgument('enable_custom_follower',
                              default_value='false',
                              description='Set true to run custom PID/LQR path_follower instead of Nav2 controller'),
+
+        DeclareLaunchArgument('enable_clock_bridge',
+                             default_value='false',
+                             description='Start an extra /clock bridge from Gazebo. OFF by default: turtlebot3_gazebo '
+                                         '(Jazzy) already bridges /clock - a second publisher makes the sim clock '
+                                         'jump back in time and clears TF buffers. Set true only on hosts whose '
+                                         'turtlebot3_gazebo does NOT provide a /clock bridge'),
 
         # 1. Gazebo + Robot Spawning
         IncludeLaunchDescription(
@@ -60,7 +68,17 @@ def generate_launch_description():
             }.items()
         ),
 
-        # 4. Twist to TwistStamped relay for Gazebo Bridge
+        # 4. Optional extra /clock bridge (only for hosts WITHOUT turtlebot3_gazebo's built-in one)
+        Node(
+            condition=IfCondition(enable_clock_bridge),
+            package='ros_gz_bridge',
+            executable='parameter_bridge',
+            name='clock_bridge',
+            output='screen',
+            arguments=['/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock']
+        ),
+
+        # 5. Twist to TwistStamped relay for Gazebo Bridge
         Node(
             package='dynamic_obstacle_avoidance',
             executable='cmd_vel_relay',

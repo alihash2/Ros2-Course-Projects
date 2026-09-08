@@ -22,7 +22,7 @@ import time
 import rclpy
 from rclpy.node import Node
 from rclpy.executors import SingleThreadedExecutor
-from rclpy.qos import QoSProfile, DurabilityPolicy
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from nav_msgs.msg import OccupancyGrid, Odometry
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from std_msgs.msg import String
@@ -57,16 +57,27 @@ class CostmapMonitor(Node):
     def __init__(self):
         super().__init__('costmap_monitor')
         self.map_msg = None
+        self.static_map_msg = None
         self.current_pos = None
         self.current_yaw = 0.0
 
+        latched_qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE
+        )
         self.create_subscription(
-            OccupancyGrid, '/global_costmap/costmap', self._map_cb, 10)
+            OccupancyGrid, '/global_costmap/costmap', self._map_cb, latched_qos)
+        self.create_subscription(
+            OccupancyGrid, '/map', self._static_map_cb, latched_qos)
         self.create_subscription(
             Odometry, '/odom', self._odom_cb, 10)
 
     def _map_cb(self, msg):
         self.map_msg = msg
+
+    def _static_map_cb(self, msg):
+        self.static_map_msg = msg
 
     def _odom_cb(self, msg):
         self.current_pos = (msg.pose.pose.position.x, msg.pose.pose.position.y)
@@ -77,9 +88,9 @@ class CostmapMonitor(Node):
 
     def validate_goal(self, x, y):
         """Return (ok, reason). Checks map bounds and cell occupancy."""
-        m = self.map_msg
+        m = self.map_msg if self.map_msg is not None else self.static_map_msg
         if m is None:
-            return False, "costmap not received yet (is Nav2 fully up?)"
+            return False, "neither global costmap nor static map received yet (is Nav2 fully up?)"
 
         res = m.info.resolution
         ox = m.info.origin.position.x
@@ -220,7 +231,10 @@ def do_switch_local(switcher, current_local):
 
 
 def main():
-    rclpy.init()
+    init_args = list(sys.argv)
+    if not any('use_sim_time' in arg for arg in init_args):
+        init_args.extend(['--ros-args', '-p', 'use_sim_time:=true'])
+    rclpy.init(args=init_args)
 
     monitor = CostmapMonitor()
     monitor_executor = SingleThreadedExecutor()
@@ -247,7 +261,12 @@ def main():
 
     initial_pose = PoseStamped()
     initial_pose.header.frame_id = 'map'
-    initial_pose.header.stamp = nav.get_clock().now().to_msg()
+    rclpy.spin_once(nav, timeout_sec=0.1)
+    now_msg = monitor.get_clock().now().to_msg()
+    if now_msg.sec == 0 and now_msg.nanosec == 0:
+        time.sleep(0.5)
+        now_msg = monitor.get_clock().now().to_msg()
+    initial_pose.header.stamp = now_msg
     initial_pose.pose.position.x = DEFAULT_SPAWN[0]
     initial_pose.pose.position.y = DEFAULT_SPAWN[1]
     initial_pose.pose.orientation.w = 1.0
@@ -276,10 +295,12 @@ def main():
             heading_str = f"{math.degrees(monitor.current_yaw):.1f}°"
             goal_str = f"({current_goal[0]:.2f}, {current_goal[1]:.2f})" \
                 if current_goal else "none"
+            map_status = "global costmap" if monitor.map_msg else ("static map (fallback)" if monitor.static_map_msg else "waiting...")
 
             print(f"\n  Position: {pos_str}")
             print(f"  Heading : {heading_str}")
             print(f"  Goal    : {goal_str}")
+            print(f"  Map     : {map_status}")
             print(f"  Planners: Global={current_global} | Local={current_local}")
 
             if current_goal is not None and monitor.current_pos is not None:
@@ -308,7 +329,7 @@ def main():
 
                 goal = PoseStamped()
                 goal.header.frame_id = 'map'
-                goal.header.stamp = nav.get_clock().now().to_msg()
+                goal.header.stamp = monitor.get_clock().now().to_msg()
                 goal.pose.position.x = x
                 goal.pose.position.y = y
                 goal.pose.orientation.w = 1.0
@@ -336,7 +357,7 @@ def main():
                             print("\n  [STOP] Emergency Stop...")
                             nav.cancelTask()
                             zero = TwistStamped()
-                            zero.header.stamp = nav.get_clock().now().to_msg()
+                            zero.header.stamp = monitor.get_clock().now().to_msg()
                             zero.header.frame_id = 'base_link'
                             cmd_pub.publish(zero)
                             stopped = True
@@ -374,7 +395,7 @@ def main():
             elif choice == '2':
                 nav.cancelTask()
                 zero = TwistStamped()
-                zero.header.stamp = nav.get_clock().now().to_msg()
+                zero.header.stamp = monitor.get_clock().now().to_msg()
                 zero.header.frame_id = 'base_link'
                 cmd_pub.publish(zero)
                 current_goal = None
