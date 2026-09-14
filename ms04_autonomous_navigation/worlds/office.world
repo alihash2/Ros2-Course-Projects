@@ -1,0 +1,334 @@
+<?xml version="1.0"?>
+<sdf version="1.8">
+  <world name="office_world">
+    <physics type="ode">
+      <real_time_update_rate>1000.0</real_time_update_rate>
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <ode>
+        <solver>
+          <type>quick</type>
+          <iters>150</iters>
+          <precon_iters>0</precon_iters>
+          <sor>1.4</sor>
+          <use_dynamic_moi_rescaling>1</use_dynamic_moi_rescaling>
+        </solver>
+        <constraints>
+          <cfm>0.00001</cfm>
+          <erp>0.2</erp>
+          <contact_max_correcting_vel>2000.0</contact_max_correcting_vel>
+          <contact_surface_layer>0.01</contact_surface_layer>
+        </constraints>
+      </ode>
+    </physics>
+
+    <!-- Essential Gazebo Plugins for Simulation -->
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
+
+    <!-- Ambient Lighting & Sun -->
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <!-- Ground Plane -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>50 50</size>
+            </plane>
+          </geometry>
+          <surface>
+            <friction>
+              <ode>
+                <mu>100</mu>
+                <mu2>50</mu2>
+              </ode>
+            </friction>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>50 50</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>0.85 0.85 0.85 1</ambient>
+            <diffuse>0.85 0.85 0.85 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Office Structure: Outer Walls, Interior Rooms, Corridors, and Furniture -->
+    <model name="office_structure">
+      <static>true</static>
+      <link name="office_link">
+
+        <!-- Perimeter Walls (16m x 14m, 2.5m high, 0.2m thick) -->
+        <!-- North Wall -->
+        <collision name="north_wall_col">
+          <pose>0 7.0 1.25 0 0 0</pose>
+          <geometry><box><size>16.2 0.2 2.5</size></box></geometry>
+        </collision>
+        <visual name="north_wall_vis">
+          <pose>0 7.0 1.25 0 0 0</pose>
+          <geometry><box><size>16.2 0.2 2.5</size></box></geometry>
+          <material><ambient>0.7 0.72 0.75 1</ambient><diffuse>0.7 0.72 0.75 1</diffuse></material>
+        </visual>
+
+        <!-- South Wall -->
+        <collision name="south_wall_col">
+          <pose>0 -7.0 1.25 0 0 0</pose>
+          <geometry><box><size>16.2 0.2 2.5</size></box></geometry>
+        </collision>
+        <visual name="south_wall_vis">
+          <pose>0 -7.0 1.25 0 0 0</pose>
+          <geometry><box><size>16.2 0.2 2.5</size></box></geometry>
+          <material><ambient>0.7 0.72 0.75 1</ambient><diffuse>0.7 0.72 0.75 1</diffuse></material>
+        </visual>
+
+        <!-- West Wall -->
+        <collision name="west_wall_col">
+          <pose>-8.0 0 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 14.2 2.5</size></box></geometry>
+        </collision>
+        <visual name="west_wall_vis">
+          <pose>-8.0 0 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 14.2 2.5</size></box></geometry>
+          <material><ambient>0.7 0.72 0.75 1</ambient><diffuse>0.7 0.72 0.75 1</diffuse></material>
+        </visual>
+
+        <!-- East Wall -->
+        <collision name="east_wall_col">
+          <pose>8.0 0 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 14.2 2.5</size></box></geometry>
+        </collision>
+        <visual name="east_wall_vis">
+          <pose>8.0 0 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 14.2 2.5</size></box></geometry>
+          <material><ambient>0.7 0.72 0.75 1</ambient><diffuse>0.7 0.72 0.75 1</diffuse></material>
+        </visual>
+
+        <!-- Interior Hallway Walls (Corridor along Y from -7 to +7, width 2.4m, X in [-1.2, +1.2]) -->
+        <!-- West Hallway Wall (Separating left rooms from corridor, with 2 doors) -->
+        <!-- West Corridor Wall North Section -->
+        <collision name="west_corr_wall_n_col">
+          <pose>-1.2 5.0 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 3.8 2.5</size></box></geometry>
+        </collision>
+        <visual name="west_corr_wall_n_vis">
+          <pose>-1.2 5.0 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 3.8 2.5</size></box></geometry>
+          <material><ambient>0.8 0.82 0.85 1</ambient><diffuse>0.8 0.82 0.85 1</diffuse></material>
+        </visual>
+        <!-- West Doorway North: between y=2.0 and y=3.1 (1.1m opening) -->
+        <!-- West Corridor Wall Center Section -->
+        <collision name="west_corr_wall_c_col">
+          <pose>-1.2 0.5 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 3.0 2.5</size></box></geometry>
+        </collision>
+        <visual name="west_corr_wall_c_vis">
+          <pose>-1.2 0.5 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 3.0 2.5</size></box></geometry>
+          <material><ambient>0.8 0.82 0.85 1</ambient><diffuse>0.8 0.82 0.85 1</diffuse></material>
+        </visual>
+        <!-- West Doorway South: between y=-1.0 and y=-2.2 (1.2m opening) -->
+        <!-- West Corridor Wall South Section -->
+        <collision name="west_corr_wall_s_col">
+          <pose>-1.2 -4.6 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 4.6 2.5</size></box></geometry>
+        </collision>
+        <visual name="west_corr_wall_s_vis">
+          <pose>-1.2 -4.6 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 4.6 2.5</size></box></geometry>
+          <material><ambient>0.8 0.82 0.85 1</ambient><diffuse>0.8 0.82 0.85 1</diffuse></material>
+        </visual>
+
+        <!-- East Hallway Wall (Separating right rooms from corridor, with 2 doors) -->
+        <!-- East Corridor Wall North Section -->
+        <collision name="east_corr_wall_n_col">
+          <pose>1.2 5.0 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 3.8 2.5</size></box></geometry>
+        </collision>
+        <visual name="east_corr_wall_n_vis">
+          <pose>1.2 5.0 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 3.8 2.5</size></box></geometry>
+          <material><ambient>0.8 0.82 0.85 1</ambient><diffuse>0.8 0.82 0.85 1</diffuse></material>
+        </visual>
+        <!-- East Doorway North: between y=2.0 and y=3.1 (1.1m opening) -->
+        <!-- East Corridor Wall Center Section -->
+        <collision name="east_corr_wall_c_col">
+          <pose>1.2 0.5 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 3.0 2.5</size></box></geometry>
+        </collision>
+        <visual name="east_corr_wall_c_vis">
+          <pose>1.2 0.5 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 3.0 2.5</size></box></geometry>
+          <material><ambient>0.8 0.82 0.85 1</ambient><diffuse>0.8 0.82 0.85 1</diffuse></material>
+        </visual>
+        <!-- East Doorway South: between y=-1.0 and y=-2.2 (1.2m opening) -->
+        <!-- East Corridor Wall South Section -->
+        <collision name="east_corr_wall_s_col">
+          <pose>1.2 -4.6 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 4.6 2.5</size></box></geometry>
+        </collision>
+        <visual name="east_corr_wall_s_vis">
+          <pose>1.2 -4.6 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 4.6 2.5</size></box></geometry>
+          <material><ambient>0.8 0.82 0.85 1</ambient><diffuse>0.8 0.82 0.85 1</diffuse></material>
+        </visual>
+
+        <!-- Room Divider Walls (East-West walls dividing North & South offices on both sides) -->
+        <!-- Divider Left (West side: x in [-8, -1.2], at y=0.0) -->
+        <collision name="divider_west_col">
+          <pose>-4.6 0.0 1.25 0 0 0</pose>
+          <geometry><box><size>6.6 0.2 2.5</size></box></geometry>
+        </collision>
+        <visual name="divider_west_vis">
+          <pose>-4.6 0.0 1.25 0 0 0</pose>
+          <geometry><box><size>6.6 0.2 2.5</size></box></geometry>
+          <material><ambient>0.8 0.82 0.85 1</ambient><diffuse>0.8 0.82 0.85 1</diffuse></material>
+        </visual>
+
+        <!-- Divider Right (East side: x in [1.2, 8], at y=0.0) -->
+        <collision name="divider_east_col">
+          <pose>4.6 0.0 1.25 0 0 0</pose>
+          <geometry><box><size>6.6 0.2 2.5</size></box></geometry>
+        </collision>
+        <visual name="divider_east_vis">
+          <pose>4.6 0.0 1.25 0 0 0</pose>
+          <geometry><box><size>6.6 0.2 2.5</size></box></geometry>
+          <material><ambient>0.8 0.82 0.85 1</ambient><diffuse>0.8 0.82 0.85 1</diffuse></material>
+        </visual>
+
+        <!-- FURNITURE & OBSTACLES -->
+        <!-- Room 1 (North-West: Conference Room at x in [-7.5, -2], y in [1, 6.5]) -->
+        <!-- Large Conference Table -->
+        <collision name="conf_table_col">
+          <pose>-4.5 3.5 0.4 0 0 0</pose>
+          <geometry><box><size>3.0 1.4 0.8</size></box></geometry>
+        </collision>
+        <visual name="conf_table_vis">
+          <pose>-4.5 3.5 0.4 0 0 0</pose>
+          <geometry><box><size>3.0 1.4 0.8</size></box></geometry>
+          <material><ambient>0.3 0.2 0.1 1</ambient><diffuse>0.4 0.25 0.15 1</diffuse></material>
+        </visual>
+
+        <!-- Room 2 (South-West: Reception / Lounge at x in [-7.5, -2], y in [-6.5, -1]) -->
+        <!-- Reception Counter Desk -->
+        <collision name="reception_desk_col">
+          <pose>-4.0 -3.5 0.5 0 0 0</pose>
+          <geometry><box><size>2.2 0.9 1.0</size></box></geometry>
+        </collision>
+        <visual name="reception_desk_vis">
+          <pose>-4.0 -3.5 0.5 0 0 0</pose>
+          <geometry><box><size>2.2 0.9 1.0</size></box></geometry>
+          <material><ambient>0.2 0.3 0.4 1</ambient><diffuse>0.25 0.35 0.5 1</diffuse></material>
+        </visual>
+        <!-- Lounge Sofa -->
+        <collision name="sofa_col">
+          <pose>-6.8 -3.5 0.4 0 0 0</pose>
+          <geometry><box><size>0.9 2.4 0.8</size></box></geometry>
+        </collision>
+        <visual name="sofa_vis">
+          <pose>-6.8 -3.5 0.4 0 0 0</pose>
+          <geometry><box><size>0.9 2.4 0.8</size></box></geometry>
+          <material><ambient>0.5 0.1 0.1 1</ambient><diffuse>0.6 0.15 0.15 1</diffuse></material>
+        </visual>
+
+        <!-- Room 3 (North-East: Open Office / Cubicles at x in [2, 7.5], y in [1, 6.5]) -->
+        <!-- Desk Pod 1 -->
+        <collision name="desk_pod_1_col">
+          <pose>4.0 4.2 0.38 0 0 0</pose>
+          <geometry><box><size>1.6 1.0 0.75</size></box></geometry>
+        </collision>
+        <visual name="desk_pod_1_vis">
+          <pose>4.0 4.2 0.38 0 0 0</pose>
+          <geometry><box><size>1.6 1.0 0.75</size></box></geometry>
+          <material><ambient>0.85 0.8 0.75 1</ambient><diffuse>0.85 0.8 0.75 1</diffuse></material>
+        </visual>
+        <!-- Desk Pod 2 -->
+        <collision name="desk_pod_2_col">
+          <pose>6.2 4.2 0.38 0 0 0</pose>
+          <geometry><box><size>1.6 1.0 0.75</size></box></geometry>
+        </collision>
+        <visual name="desk_pod_2_vis">
+          <pose>6.2 4.2 0.38 0 0 0</pose>
+          <geometry><box><size>1.6 1.0 0.75</size></box></geometry>
+          <material><ambient>0.85 0.8 0.75 1</ambient><diffuse>0.85 0.8 0.75 1</diffuse></material>
+        </visual>
+        <!-- Partition Screen -->
+        <collision name="partition_col">
+          <pose>5.1 4.2 0.65 0 0 0</pose>
+          <geometry><box><size>0.1 2.2 1.3</size></box></geometry>
+        </collision>
+        <visual name="partition_vis">
+          <pose>5.1 4.2 0.65 0 0 0</pose>
+          <geometry><box><size>0.1 2.2 1.3</size></box></geometry>
+          <material><ambient>0.3 0.5 0.7 1</ambient><diffuse>0.3 0.5 0.7 1</diffuse></material>
+        </visual>
+
+        <!-- Room 4 (South-East: Executive Office / Breakroom at x in [2, 7.5], y in [-6.5, -1]) -->
+        <!-- Executive Desk -->
+        <collision name="exec_desk_col">
+          <pose>4.8 -4.0 0.38 0 0 0</pose>
+          <geometry><box><size>2.0 1.2 0.75</size></box></geometry>
+        </collision>
+        <visual name="exec_desk_vis">
+          <pose>4.8 -4.0 0.38 0 0 0</pose>
+          <geometry><box><size>2.0 1.2 0.75</size></box></geometry>
+          <material><ambient>0.2 0.2 0.25 1</ambient><diffuse>0.3 0.3 0.35 1</diffuse></material>
+        </visual>
+        <!-- Storage Bookshelf against wall -->
+        <collision name="bookshelf_col">
+          <pose>7.4 -3.5 0.9 0 0 0</pose>
+          <geometry><box><size>0.6 2.0 1.8</size></box></geometry>
+        </collision>
+        <visual name="bookshelf_vis">
+          <pose>7.4 -3.5 0.9 0 0 0</pose>
+          <geometry><box><size>0.6 2.0 1.8</size></box></geometry>
+          <material><ambient>0.4 0.3 0.2 1</ambient><diffuse>0.45 0.35 0.25 1</diffuse></material>
+        </visual>
+
+        <!-- Hallway Plants / Obstacles -->
+        <collision name="hall_plant_1_col">
+          <pose>0.8 6.2 0.4 0 0 0</pose>
+          <geometry><cylinder><radius>0.25</radius><length>0.8</length></cylinder></geometry>
+        </collision>
+        <visual name="hall_plant_1_vis">
+          <pose>0.8 6.2 0.4 0 0 0</pose>
+          <geometry><cylinder><radius>0.25</radius><length>0.8</length></cylinder></geometry>
+          <material><ambient>0.1 0.5 0.1 1</ambient><diffuse>0.1 0.6 0.1 1</diffuse></material>
+        </visual>
+
+        <collision name="hall_plant_2_col">
+          <pose>-0.8 -6.2 0.4 0 0 0</pose>
+          <geometry><cylinder><radius>0.25</radius><length>0.8</length></cylinder></geometry>
+        </collision>
+        <visual name="hall_plant_2_vis">
+          <pose>-0.8 -6.2 0.4 0 0 0</pose>
+          <geometry><cylinder><radius>0.25</radius><length>0.8</length></cylinder></geometry>
+          <material><ambient>0.1 0.5 0.1 1</ambient><diffuse>0.1 0.6 0.1 1</diffuse></material>
+        </visual>
+
+      </link>
+    </model>
+  </world>
+</sdf>

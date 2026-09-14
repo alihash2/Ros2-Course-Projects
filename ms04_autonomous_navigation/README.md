@@ -18,3 +18,17 @@ ROS 2 package for autonomous navigation with GUI interfaces across custom Gazebo
 
 ### Actions
 - `ExecuteMission.action`: ROS 2 Action interface for mission execution with real-time feedback (current pose, distance remaining, ETA, recovery count, waypoint indices).
+
+## Simulation Environments
+
+### Office Environment
+Features a multi-room office layout with reception/lounge, conference room, open office cubicles, executive office, and central corridor.
+```bash
+ros2 launch ms04_autonomous_navigation office_simulation.launch.py
+```
+
+### Warehouse Environment
+Features an industrial storage layout with 3 dual-sided high-bay shelving racks, staging areas, pallet stacks, cargo crates, and loading zones.
+```bash
+ros2 launch ms04_autonomous_navigation warehouse_simulation.launch.py
+```

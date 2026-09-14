@@ -38,6 +38,18 @@ rosidl_generate_interfaces(${PROJECT_NAME}
     action_msgs
 )
 
+# Build cmd_vel_relay node
+add_executable(cmd_vel_relay src/cmd_vel_relay.cpp)
+ament_target_dependencies(cmd_vel_relay
+  rclcpp
+  geometry_msgs
+)
+
+install(TARGETS
+  cmd_vel_relay
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 # Install directories for launch, worlds, maps, params, rviz
 install(DIRECTORY
   launch
