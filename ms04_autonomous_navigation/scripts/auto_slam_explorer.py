@@ -71,6 +71,10 @@ class AutoSlamExplorer(Node):
         # Navigation state
         self.current_target = None
         self.target_start_time = 0.0
+        self.target_origin_x = 0.0
+        self.target_origin_y = 0.0
+        self.min_travel_time = 2.0       # seconds — must elapse before arrival can be declared
+        self.min_travel_distance = 0.3   # meters — robot must have traveled this far from target origin
         self.start_time = self.get_clock().now()
         self.is_exploring = True
         self.map_saved = False
@@ -302,12 +306,17 @@ class AutoSlamExplorer(Node):
             # Check if target reached or timed out (timeout scales with distance)
             dist_to_target = math.hypot(self.current_target[0] - self.robot_x,
                                         self.current_target[1] - self.robot_y)
-            if dist_to_target < 0.5:
+            dist_from_start = math.hypot(self.robot_x - self.target_origin_x,
+                                         self.robot_y - self.target_origin_y)
+            if (dist_to_target < 0.35 and
+                    dist_from_start > self.min_travel_distance and
+                    (now_sec - self.target_start_time) > self.min_travel_time):
                 self.get_logger().info(f'Reached frontier waypoint {self.current_target}')
                 self.record_visited_frontier(self.current_target, now_sec)
                 need_target = True
             elif (now_sec - self.target_start_time) > max(25.0, dist_to_target / 0.3):
                 self.get_logger().info(f'Frontier target {self.current_target} timed out. Selecting new frontier.')
+                self.record_visited_frontier(self.current_target, now_sec)
                 need_target = True
 
         if need_target:
@@ -326,6 +335,8 @@ class AutoSlamExplorer(Node):
 
             self.current_target = candidate
             self.target_start_time = now_sec
+            self.target_origin_x = self.robot_x
+            self.target_origin_y = self.robot_y
             self.get_logger().info(f'New frontier target selected: ({candidate[0]:.2f}, {candidate[1]:.2f})')
 
         # Reactive Motion Control toward target
