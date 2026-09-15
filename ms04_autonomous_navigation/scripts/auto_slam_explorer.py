@@ -30,19 +30,27 @@ class AutoSlamExplorer(Node):
         # Parameters
         self.declare_parameter('map_save_path', '')
         self.declare_parameter('max_exploration_time', 300.0)  # seconds
-        self.declare_parameter('linear_speed', 0.22)          # m/s
-        self.declare_parameter('angular_speed', 0.6)          # rad/s
+        self.declare_parameter('linear_speed', 0.35)          # m/s cruise
+        self.declare_parameter('max_linear_speed', 0.6)       # m/s straight-line sprint
+        self.declare_parameter('angular_speed', 0.8)          # rad/s
         self.declare_parameter('min_frontier_size', 6)        # cells
-        self.declare_parameter('obstacle_distance', 0.45)     # meters
+        self.declare_parameter('obstacle_distance', 0.35)     # meters
         self.declare_parameter('auto_save', True)
 
         self.map_save_path = self.get_parameter('map_save_path').get_parameter_value().string_value
         self.max_exploration_time = self.get_parameter('max_exploration_time').get_parameter_value().double_value
         self.linear_speed = self.get_parameter('linear_speed').get_parameter_value().double_value
+        self.max_linear_speed = self.get_parameter('max_linear_speed').get_parameter_value().double_value
         self.angular_speed = self.get_parameter('angular_speed').get_parameter_value().double_value
         self.min_frontier_size = self.get_parameter('min_frontier_size').get_parameter_value().integer_value
         self.obstacle_distance = self.get_parameter('obstacle_distance').get_parameter_value().double_value
         self.auto_save = self.get_parameter('auto_save').get_parameter_value().bool_value
+
+        # Frontier memory (visited centroids, anti-oscillation)
+        self.visited_frontiers = []  # (x, y, timestamp_sec)
+        self.visited_penalty_radius = 1.0   # meters — frontiers within this are 'seen'
+        self.visited_penalty_window = 60.0  # seconds — how long a visit penalizes
+        self.visited_penalty_factor = 0.25  # score multiplier for seen frontiers
 
         # Robot state
         self.robot_x = 0.0
@@ -220,7 +228,7 @@ class AutoSlamExplorer(Node):
         return clusters
 
     def select_best_frontier(self, clusters):
-        """Pick frontier with best utility (balance between proximity and cluster size)."""
+        """Pick frontier with best utility (balance between proximity, cluster size, and exploration memory)."""
         if not clusters:
             return None
 
@@ -235,11 +243,27 @@ class AutoSlamExplorer(Node):
 
             # Information gain score: size / distance
             score = float(size) / (dist + 0.8)
+
+            # Penalize frontiers near recently-visited centroids (anti-oscillation)
+            for (vx, vy, _) in self.visited_frontiers:
+                if math.hypot(wx - vx, wy - vy) < self.visited_penalty_radius:
+                    score *= self.visited_penalty_factor
+                    break
+
             if score > best_score:
                 best_score = score
                 best_candidate = (wx, wy)
 
         return best_candidate
+
+    def prune_visited_frontiers(self, now_sec):
+        """Drop visited-frontier entries older than the penalty window."""
+        cutoff = now_sec - self.visited_penalty_window
+        self.visited_frontiers = [v for v in self.visited_frontiers if v[2] > cutoff]
+
+    def record_visited_frontier(self, target, now_sec):
+        """Remember that the robot was sent toward this frontier."""
+        self.visited_frontiers.append((target[0], target[1], now_sec))
 
     def control_loop(self):
         if not self.is_exploring:
@@ -275,17 +299,19 @@ class AutoSlamExplorer(Node):
         if self.current_target is None:
             need_target = True
         else:
-            # Check if target reached or timed out (18 seconds per target)
+            # Check if target reached or timed out (timeout scales with distance)
             dist_to_target = math.hypot(self.current_target[0] - self.robot_x,
                                         self.current_target[1] - self.robot_y)
-            if dist_to_target < 0.65:
+            if dist_to_target < 0.5:
                 self.get_logger().info(f'Reached frontier waypoint {self.current_target}')
+                self.record_visited_frontier(self.current_target, now_sec)
                 need_target = True
-            elif (now_sec - self.target_start_time) > 18.0:
+            elif (now_sec - self.target_start_time) > max(25.0, dist_to_target / 0.3):
                 self.get_logger().info(f'Frontier target {self.current_target} timed out. Selecting new frontier.')
                 need_target = True
 
         if need_target:
+            self.prune_visited_frontiers(now_sec)
             clusters = self.find_frontiers()
             if not clusters:
                 self.get_logger().info('No more frontiers detected! Environment exploration complete.')
@@ -341,14 +367,27 @@ class AutoSlamExplorer(Node):
         else:
             self.stuck_counter = max(0, self.stuck_counter - 1)
 
-            # If heading error is large, turn in place first
-            if abs(heading_error) > 0.6:
-                twist.linear.x = 0.04
-                twist.angular.z = self.angular_speed if heading_error > 0 else -self.angular_speed
+            # Speed reduction ramp: clear path ahead -> sprint; near obstacle -> slow down
+            if self.front_dist > 1.5:
+                speed_factor = 1.0
             else:
-                # Drive forward with proportional steering
-                twist.linear.x = self.linear_speed * max(0.2, math.cos(heading_error))
-                twist.angular.z = 1.2 * heading_error
+                speed_factor = max(0.0,
+                                   (self.front_dist - self.obstacle_distance) /
+                                   (1.5 - self.obstacle_distance))
+
+            # Heading-based control (proportional; only stop-and-turn for sharp angles)
+            if abs(heading_error) > 1.4:
+                # Very sharp turn: stop and rotate in place
+                twist.linear.x = 0.0
+                twist.angular.z = self.angular_speed if heading_error > 0 else -self.angular_speed
+            elif abs(heading_error) > 0.15:
+                # Moderate heading error: proportional steering while easing forward
+                twist.linear.x = self.linear_speed * math.cos(heading_error) * speed_factor
+                twist.angular.z = 1.5 * heading_error
+            else:
+                # Nearly straight: sprint at max speed with light corrective steering
+                twist.linear.x = self.max_linear_speed * speed_factor
+                twist.angular.z = 1.0 * heading_error
 
         self.cmd_vel_pub.publish(twist)
 

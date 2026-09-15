@@ -77,10 +77,11 @@ def generate_launch_description():
             'use_sim_time': True,
             'map_save_path': map_save_path,
             'max_exploration_time': ParameterValue(max_exploration_time, value_type=float),
-            'linear_speed': 0.22,
-            'angular_speed': 0.6,
+            'linear_speed': 0.35,
+            'max_linear_speed': 0.6,
+            'angular_speed': 0.8,
             'min_frontier_size': 6,
-            'obstacle_distance': 0.45,
+            'obstacle_distance': 0.35,
             'auto_save': True
         }]
     )

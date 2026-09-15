@@ -167,19 +167,22 @@
           <material><ambient>0.8 0.7 0.2 1</ambient><diffuse>0.9 0.75 0.2 1</diffuse></material>
         </visual>
 
-        <!-- INDUSTRIAL STORAGE RACKS (Running along Y, width 0.9m, length 10.0m, height 2.5m) -->
-        <!-- Rack Row 1 (at x = -1.0) -->
+        <!-- ============================================ -->
+        <!-- STORAGE RACKS — asymmetric lengths, staggered -->
+        <!-- ============================================ -->
+
+        <!-- Rack Row 1 at x=-1.0: 8m long, shifted north (y from -3 to +5) -->
         <collision name="rack_row_1_col">
-          <pose>-1.0 0.0 1.25 0 0 0</pose>
-          <geometry><box><size>0.9 10.0 2.5</size></box></geometry>
+          <pose>-1.0 1.0 1.25 0 0 0</pose>
+          <geometry><box><size>0.9 8.0 2.5</size></box></geometry>
         </collision>
         <visual name="rack_row_1_vis">
-          <pose>-1.0 0.0 1.25 0 0 0</pose>
-          <geometry><box><size>0.9 10.0 2.5</size></box></geometry>
+          <pose>-1.0 1.0 1.25 0 0 0</pose>
+          <geometry><box><size>0.9 8.0 2.5</size></box></geometry>
           <material><ambient>0.15 0.25 0.5 1</ambient><diffuse>0.2 0.35 0.65 1</diffuse></material>
         </visual>
 
-        <!-- Rack Row 2 (at x = 2.0, Aisle width = 2.1m) -->
+        <!-- Rack Row 2 at x=2.0: 10m long (full span, y from -5 to +5) -->
         <collision name="rack_row_2_col">
           <pose>2.0 0.0 1.25 0 0 0</pose>
           <geometry><box><size>0.9 10.0 2.5</size></box></geometry>
@@ -190,81 +193,181 @@
           <material><ambient>0.15 0.25 0.5 1</ambient><diffuse>0.2 0.35 0.65 1</diffuse></material>
         </visual>
 
-        <!-- Rack Row 3 (at x = 5.0, Aisle width = 2.1m) -->
+        <!-- Rack Row 3 at x=5.0: 6m short rack, shifted north (y from -2 to +4) -->
         <collision name="rack_row_3_col">
-          <pose>5.0 0.0 1.25 0 0 0</pose>
-          <geometry><box><size>0.9 10.0 2.5</size></box></geometry>
+          <pose>5.0 1.0 1.25 0 0 0</pose>
+          <geometry><box><size>0.9 6.0 2.5</size></box></geometry>
         </collision>
         <visual name="rack_row_3_vis">
-          <pose>5.0 0.0 1.25 0 0 0</pose>
-          <geometry><box><size>0.9 10.0 2.5</size></box></geometry>
+          <pose>5.0 1.0 1.25 0 0 0</pose>
+          <geometry><box><size>0.9 6.0 2.5</size></box></geometry>
           <material><ambient>0.15 0.25 0.5 1</ambient><diffuse>0.2 0.35 0.65 1</diffuse></material>
         </visual>
 
-        <!-- PALLET STACKS & CARGO STAGING -->
-        <!-- Staging Area (West side, x around -7 to -5) -->
-        <!-- Pallet Stack 1 -->
-        <collision name="pallet_stack_1_col">
-          <pose>-7.0 3.5 0.6 0 0 0</pose>
+        <!-- Cross-rack chokepoint at north end (horizontal, creates bottleneck) -->
+        <collision name="cross_rack_col">
+          <pose>3.5 7.0 1.25 0 0 0</pose>
+          <geometry><box><size>3.0 0.5 2.5</size></box></geometry>
+        </collision>
+        <visual name="cross_rack_vis">
+          <pose>3.5 7.0 1.25 0 0 0</pose>
+          <geometry><box><size>3.0 0.5 2.5</size></box></geometry>
+          <material><ambient>0.15 0.25 0.5 1</ambient><diffuse>0.2 0.35 0.65 1</diffuse></material>
+        </visual>
+
+        <!-- ============================================ -->
+        <!-- WEST LOADING BAY — HIGH density, scattered   -->
+        <!-- ============================================ -->
+
+        <!-- Pallet Stack A (near north) -->
+        <collision name="pallet_A_col">
+          <pose>-7.5 4.0 0.6 0 0 0</pose>
           <geometry><box><size>1.4 1.4 1.2</size></box></geometry>
         </collision>
-        <visual name="pallet_stack_1_vis">
-          <pose>-7.0 3.5 0.6 0 0 0</pose>
+        <visual name="pallet_A_vis">
+          <pose>-7.5 4.0 0.6 0 0 0</pose>
           <geometry><box><size>1.4 1.4 1.2</size></box></geometry>
           <material><ambient>0.6 0.45 0.25 1</ambient><diffuse>0.65 0.5 0.3 1</diffuse></material>
         </visual>
 
-        <!-- Pallet Stack 2 -->
-        <collision name="pallet_stack_2_col">
-          <pose>-7.0 -3.5 0.6 0 0 0</pose>
-          <geometry><box><size>1.4 1.4 1.2</size></box></geometry>
+        <!-- Pallet Stack B (smaller, offset south) -->
+        <collision name="pallet_B_col">
+          <pose>-8.0 -1.5 0.4 0 0 0</pose>
+          <geometry><box><size>1.2 1.0 0.8</size></box></geometry>
         </collision>
-        <visual name="pallet_stack_2_vis">
-          <pose>-7.0 -3.5 0.6 0 0 0</pose>
-          <geometry><box><size>1.4 1.4 1.2</size></box></geometry>
-          <material><ambient>0.6 0.45 0.25 1</ambient><diffuse>0.65 0.5 0.3 1</diffuse></material>
+        <visual name="pallet_B_vis">
+          <pose>-8.0 -1.5 0.4 0 0 0</pose>
+          <geometry><box><size>1.2 1.0 0.8</size></box></geometry>
+          <material><ambient>0.55 0.4 0.2 1</ambient><diffuse>0.6 0.45 0.25 1</diffuse></material>
         </visual>
 
-        <!-- Cargo Crates at East end (x around 8.0) -->
-        <collision name="crate_stack_east_col">
-          <pose>8.0 2.0 0.75 0 0 0</pose>
-          <geometry><box><size>1.2 2.5 1.5</size></box></geometry>
+        <!-- Pallet Stack C (different shape, further south) -->
+        <collision name="pallet_C_col">
+          <pose>-6.5 -5.5 0.5 0 0 0</pose>
+          <geometry><box><size>1.0 1.8 1.0</size></box></geometry>
         </collision>
-        <visual name="crate_stack_east_vis">
-          <pose>8.0 2.0 0.75 0 0 0</pose>
-          <geometry><box><size>1.2 2.5 1.5</size></box></geometry>
-          <material><ambient>0.5 0.35 0.2 1</ambient><diffuse>0.55 0.4 0.25 1</diffuse></material>
+        <visual name="pallet_C_vis">
+          <pose>-6.5 -5.5 0.5 0 0 0</pose>
+          <geometry><box><size>1.0 1.8 1.0</size></box></geometry>
+          <material><ambient>0.5 0.38 0.22 1</ambient><diffuse>0.55 0.42 0.27 1</diffuse></material>
         </visual>
 
-        <collision name="crate_stack_east_2_col">
-          <pose>8.0 -3.0 0.5 0 0 0</pose>
-          <geometry><box><size>1.2 2.0 1.0</size></box></geometry>
-        </collision>
-        <visual name="crate_stack_east_2_vis">
-          <pose>8.0 -3.0 0.5 0 0 0</pose>
-          <geometry><box><size>1.2 2.0 1.0</size></box></geometry>
-          <material><ambient>0.5 0.35 0.2 1</ambient><diffuse>0.55 0.4 0.25 1</diffuse></material>
-        </visual>
-
-        <!-- Industrial Oil / Chemical Drums -->
-        <collision name="drum_1_col">
-          <pose>-1.0 6.5 0.5 0 0 0</pose>
+        <!-- Drum near Pallet A -->
+        <collision name="drum_west_A_col">
+          <pose>-5.5 2.0 0.5 0 0 0</pose>
           <geometry><cylinder><radius>0.35</radius><length>1.0</length></cylinder></geometry>
         </collision>
-        <visual name="drum_1_vis">
-          <pose>-1.0 6.5 0.5 0 0 0</pose>
+        <visual name="drum_west_A_vis">
+          <pose>-5.5 2.0 0.5 0 0 0</pose>
           <geometry><cylinder><radius>0.35</radius><length>1.0</length></cylinder></geometry>
           <material><ambient>0.7 0.15 0.15 1</ambient><diffuse>0.8 0.2 0.2 1</diffuse></material>
         </visual>
 
-        <collision name="drum_2_col">
-          <pose>2.0 -6.5 0.5 0 0 0</pose>
+        <!-- Drum near Pallet C -->
+        <collision name="drum_west_C_col">
+          <pose>-5.5 -4.0 0.5 0 0 0</pose>
           <geometry><cylinder><radius>0.35</radius><length>1.0</length></cylinder></geometry>
         </collision>
-        <visual name="drum_2_vis">
-          <pose>2.0 -6.5 0.5 0 0 0</pose>
+        <visual name="drum_west_C_vis">
+          <pose>-5.5 -4.0 0.5 0 0 0</pose>
           <geometry><cylinder><radius>0.35</radius><length>1.0</length></cylinder></geometry>
           <material><ambient>0.15 0.4 0.7 1</ambient><diffuse>0.2 0.5 0.8 1</diffuse></material>
+        </visual>
+
+        <!-- Pallet jack (low obstacle, east of spawn point) -->
+        <collision name="pallet_jack_col">
+          <pose>-4.5 0.5 0.15 0 0.3 0</pose>
+          <geometry><box><size>1.0 0.5 0.3</size></box></geometry>
+        </collision>
+        <visual name="pallet_jack_vis">
+          <pose>-4.5 0.5 0.15 0 0.3 0</pose>
+          <geometry><box><size>1.0 0.5 0.3</size></box></geometry>
+          <material><ambient>0.6 0.6 0.05 1</ambient><diffuse>0.7 0.7 0.1 1</diffuse></material>
+        </visual>
+
+        <!-- ============================================ -->
+        <!-- EAST STORAGE — MEDIUM density, varied         -->
+        <!-- ============================================ -->
+
+        <!-- Crate A (large) -->
+        <collision name="crate_A_col">
+          <pose>8.5 2.0 0.75 0 0 0</pose>
+          <geometry><box><size>1.2 2.5 1.5</size></box></geometry>
+        </collision>
+        <visual name="crate_A_vis">
+          <pose>8.5 2.0 0.75 0 0 0</pose>
+          <geometry><box><size>1.2 2.5 1.5</size></box></geometry>
+          <material><ambient>0.5 0.35 0.2 1</ambient><diffuse>0.55 0.4 0.25 1</diffuse></material>
+        </visual>
+
+        <!-- Crate B (small, asymmetric) -->
+        <collision name="crate_B_col">
+          <pose>9.0 -2.0 0.3 0 0 0</pose>
+          <geometry><box><size>0.8 1.0 0.6</size></box></geometry>
+        </collision>
+        <visual name="crate_B_vis">
+          <pose>9.0 -2.0 0.3 0 0 0</pose>
+          <geometry><box><size>0.8 1.0 0.6</size></box></geometry>
+          <material><ambient>0.45 0.3 0.18 1</ambient><diffuse>0.5 0.35 0.22 1</diffuse></material>
+        </visual>
+
+        <!-- Crate C (medium, shifted from old position) -->
+        <collision name="crate_C_col">
+          <pose>7.5 -5.0 0.6 0 0.4 0</pose>
+          <geometry><box><size>1.5 1.5 1.2</size></box></geometry>
+        </collision>
+        <visual name="crate_C_vis">
+          <pose>7.5 -5.0 0.6 0 0.4 0</pose>
+          <geometry><box><size>1.5 1.5 1.2</size></box></geometry>
+          <material><ambient>0.48 0.33 0.2 1</ambient><diffuse>0.52 0.38 0.24 1</diffuse></material>
+        </visual>
+
+        <!-- ============================================ -->
+        <!-- PERIMETER — scattered obstacles               -->
+        <!-- ============================================ -->
+
+        <!-- Drum north (repositioned) -->
+        <collision name="drum_north_col">
+          <pose>-1.0 7.0 0.5 0 0 0</pose>
+          <geometry><cylinder><radius>0.35</radius><length>1.0</length></cylinder></geometry>
+        </collision>
+        <visual name="drum_north_vis">
+          <pose>-1.0 7.0 0.5 0 0 0</pose>
+          <geometry><cylinder><radius>0.35</radius><length>1.0</length></cylinder></geometry>
+          <material><ambient>0.7 0.15 0.15 1</ambient><diffuse>0.8 0.2 0.2 1</diffuse></material>
+        </visual>
+
+        <!-- Drum south (asymmetric position) -->
+        <collision name="drum_south_col">
+          <pose>3.0 -7.0 0.5 0 0 0</pose>
+          <geometry><cylinder><radius>0.35</radius><length>1.0</length></cylinder></geometry>
+        </collision>
+        <visual name="drum_south_vis">
+          <pose>3.0 -7.0 0.5 0 0 0</pose>
+          <geometry><cylinder><radius>0.35</radius><length>1.0</length></cylinder></geometry>
+          <material><ambient>0.15 0.4 0.7 1</ambient><diffuse>0.2 0.5 0.8 1</diffuse></material>
+        </visual>
+
+        <!-- Chain barrier near south wall -->
+        <collision name="chain_barrier_col">
+          <pose>-2.0 -8.5 0.4 0 0 0</pose>
+          <geometry><box><size>0.05 2.0 0.8</size></box></geometry>
+        </collision>
+        <visual name="chain_barrier_vis">
+          <pose>-2.0 -8.5 0.4 0 0 0</pose>
+          <geometry><box><size>0.05 2.0 0.8</size></box></geometry>
+          <material><ambient>0.4 0.4 0.42 1</ambient><diffuse>0.5 0.5 0.52 1</diffuse></material>
+        </visual>
+
+        <!-- Loading dock marker in west bay -->
+        <collision name="dock_marker_col">
+          <pose>-8.0 0.0 0.5 0 0 0</pose>
+          <geometry><cylinder><radius>0.3</radius><length>1.0</length></cylinder></geometry>
+        </collision>
+        <visual name="dock_marker_vis">
+          <pose>-8.0 0.0 0.5 0 0 0</pose>
+          <geometry><cylinder><radius>0.3</radius><length>1.0</length></cylinder></geometry>
+          <material><ambient>0.8 0.6 0.0 1</ambient><diffuse>0.9 0.7 0.1 1</diffuse></material>
         </visual>
 
       </link>
