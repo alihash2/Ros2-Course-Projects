@@ -50,6 +50,12 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# Install Python scripts
+install(PROGRAMS
+  scripts/auto_slam_explorer.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 # Install directories for launch, worlds, maps, params, rviz
 install(DIRECTORY
   launch
