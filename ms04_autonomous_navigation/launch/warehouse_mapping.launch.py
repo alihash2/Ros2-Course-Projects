@@ -22,7 +22,7 @@ def generate_launch_description():
     )
     map_save_path = LaunchConfiguration(
         'map_save_path',
-        default=os.path.join(pkg_ms04, 'maps', 'warehouse_map')
+        default=os.path.expanduser('~/ros2_ws/src/ms04_autonomous_navigation/maps/warehouse_map')
     )
     max_exploration_time = LaunchConfiguration('max_exploration_time', default='300.0')
 
@@ -35,7 +35,7 @@ def generate_launch_description():
     )
     declare_map_save_path = DeclareLaunchArgument(
         'map_save_path',
-        default_value=os.path.join(pkg_ms04, 'maps', 'warehouse_map'),
+        default_value=os.path.expanduser('~/ros2_ws/src/ms04_autonomous_navigation/maps/warehouse_map'),
         description='Base path (no extension) to save generated map'
     )
     declare_max_time = DeclareLaunchArgument(
@@ -63,7 +63,8 @@ def generate_launch_description():
         ),
         launch_arguments={
             'use_sim_time': use_sim_time,
-            'slam_params_file': slam_params_file
+            'slam_params_file': slam_params_file,
+            'use_map_saver': 'false'  # save only on demand via SaveMap service
         }.items()
     )
 
@@ -86,6 +87,16 @@ def generate_launch_description():
         }]
     )
 
+    # 4. RViz2 for live map + robot visualization
+    rviz_config = os.path.join(pkg_ms04, 'rviz', 'mapping.rviz')
+    rviz_node = Node(
+        package='rviz2',
+        executable='rviz2',
+        name='rviz2',
+        arguments=['-d', rviz_config],
+        output='screen'
+    )
+
     ld = LaunchDescription()
     ld.add_action(declare_sim_time)
     ld.add_action(declare_slam_params)
@@ -94,4 +105,5 @@ def generate_launch_description():
     ld.add_action(warehouse_sim)
     ld.add_action(slam_toolbox_node)
     ld.add_action(auto_explorer_node)
+    ld.add_action(rviz_node)
     return ld

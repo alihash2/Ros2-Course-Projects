@@ -52,6 +52,15 @@ class AutoSlamExplorer(Node):
         self.visited_penalty_window = 60.0  # seconds — how long a visit penalizes
         self.visited_penalty_factor = 0.25  # score multiplier for seen frontiers
 
+        # Frontier selection bias: prefer outward (distant) frontiers so the
+        # robot pushes to the map boundary before re-checking explored space
+        self.outward_bias_distance = 1.5   # meters — frontiers beyond this are 'outward'
+        self.outward_bias_factor = 0.35    # score multiplier for inward (near) frontiers
+
+        # Obstacle-shield turn persistence (dwell lock against left/right flip-flop)
+        self.turn_lock_direction = 0.0
+        self.turn_lock_until = 0.0
+
         # Robot state
         self.robot_x = 0.0
         self.robot_y = 0.0
@@ -248,6 +257,12 @@ class AutoSlamExplorer(Node):
             # Information gain score: size / distance
             score = float(size) / (dist + 0.8)
 
+            # Outward bias: prefer distant frontiers so the robot expands the
+            # map boundary first, only returning to nearby frontiers once the
+            # outer area is explored/blocked
+            if dist < self.outward_bias_distance:
+                score *= self.outward_bias_factor
+
             # Penalize frontiers near recently-visited centroids (anti-oscillation)
             for (vx, vy, _) in self.visited_frontiers:
                 if math.hypot(wx - vx, wy - vy) < self.visited_penalty_radius:
@@ -358,21 +373,32 @@ class AutoSlamExplorer(Node):
             heading_error += 2.0 * math.pi
 
         twist = Twist()
+        now_sec = self.get_clock().now().nanoseconds / 1e9
 
         # LIDAR Obstacle Avoidance Shield
         if self.front_dist < self.obstacle_distance:
-            # Obstacle directly ahead, steer towards the more open side
+            # Obstacle directly ahead. Commit to a turn direction for a short
+            # dwell so the lidar re-evaluation doesn't flip left/right every tick.
+            if now_sec >= self.turn_lock_until:
+                # Prefer turning toward the target side unless that side is also blocked
+                if heading_error >= 0.0:
+                    self.turn_lock_direction = 1.0
+                    if self.left_dist < self.obstacle_distance * 2.0:
+                        self.turn_lock_direction = -1.0
+                else:
+                    self.turn_lock_direction = -1.0
+                    if self.right_dist < self.obstacle_distance * 2.0:
+                        self.turn_lock_direction = 1.0
+                self.turn_lock_until = now_sec + 0.4
+
             twist.linear.x = 0.0
-            if self.left_dist > self.right_dist:
-                twist.angular.z = self.angular_speed
-            else:
-                twist.angular.z = -self.angular_speed
+            twist.angular.z = self.turn_lock_direction * self.angular_speed
 
             self.stuck_counter += 1
             if self.stuck_counter > 25:  # Stuck for 2.5s
                 self.get_logger().warn('Robot trapped by obstacle! Initiating recovery maneuver.')
                 self.recovery_mode = True
-                self.recovery_end_time = (self.get_clock().now().nanoseconds / 1e9) + 2.5
+                self.recovery_end_time = now_sec + 2.5
                 self.stuck_counter = 0
                 return
         else:
@@ -386,7 +412,8 @@ class AutoSlamExplorer(Node):
                                    (self.front_dist - self.obstacle_distance) /
                                    (1.5 - self.obstacle_distance))
 
-            # Heading-based control (proportional; only stop-and-turn for sharp angles)
+            # Heading-based control (proportional, angular velocity clamped to
+            # angular_speed to avoid overshoot oscillation)
             if abs(heading_error) > 1.4:
                 # Very sharp turn: stop and rotate in place
                 twist.linear.x = 0.0
@@ -394,11 +421,13 @@ class AutoSlamExplorer(Node):
             elif abs(heading_error) > 0.15:
                 # Moderate heading error: proportional steering while easing forward
                 twist.linear.x = self.linear_speed * math.cos(heading_error) * speed_factor
-                twist.angular.z = 1.5 * heading_error
+                ang = 1.5 * heading_error
+                twist.angular.z = math.copysign(min(abs(ang), self.angular_speed), ang)
             else:
                 # Nearly straight: sprint at max speed with light corrective steering
                 twist.linear.x = self.max_linear_speed * speed_factor
-                twist.angular.z = 1.0 * heading_error
+                ang = 1.0 * heading_error
+                twist.angular.z = math.copysign(min(abs(ang), self.angular_speed), ang)
 
         self.cmd_vel_pub.publish(twist)
 
