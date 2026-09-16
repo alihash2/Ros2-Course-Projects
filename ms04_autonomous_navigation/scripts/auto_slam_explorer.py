@@ -65,6 +65,12 @@ class AutoSlamExplorer(Node):
         self.avoid_dir = 1.0   # +1 turns left, -1 turns right
         self.avoid_start_yaw = 0.0
         self.avoid_cum = 0.0   # cumulative rotation in avoid_dir (rad)
+        self.avoid_start_time = 0.0
+
+        # Skirting is triggered a little earlier than the hard obstacle
+        # distance so the robot commits to going around a wall/door instead of
+        # grinding itself into a wall first.
+        self.skirt_trigger_dist = 0.55  # meters
 
         # Robot state
         self.robot_x = 0.0
@@ -81,6 +87,11 @@ class AutoSlamExplorer(Node):
         self.left_dist = 10.0
         self.right_dist = 10.0
         self.scan_received = False
+        self.ranges = None
+        self.range_min = 0.0
+        self.range_max = 0.0
+        self.angle_min = 0.0
+        self.angle_increment = 0.0
 
         # Odometry velocity (used for odom-based stuck detection)
         self.odom_lin_vel = 0.0
@@ -151,6 +162,15 @@ class AutoSlamExplorer(Node):
         if num_readings == 0:
             return
 
+        # Keep the raw beam data (plus sensor geometry) so the motion logic can
+        # query how far the wall is in an ARBITRARY direction, e.g. the current
+        # bearing to the goal.
+        self.ranges = ranges
+        self.range_min = msg.range_min
+        self.range_max = msg.range_max
+        self.angle_min = msg.angle_min
+        self.angle_increment = msg.angle_increment
+
         def safe_range(start_idx, end_idx):
             valid = [r for r in ranges[start_idx:end_idx] if msg.range_min < r < msg.range_max]
             return min(valid) if valid else 10.0
@@ -174,6 +194,21 @@ class AutoSlamExplorer(Node):
     def map_callback(self, msg: OccupancyGrid):
         self.current_map = msg
         self.map_received = True
+
+    def range_in_sector(self, center_rad, half_width_rad=0.26):
+        """Nearest lidar range within a sector centered on an angle relative
+        to the robot's heading (0 = straight ahead, >0 = toward the left)."""
+        if not self.scan_received or self.ranges is None:
+            return 10.0
+        n = len(self.ranges)
+        idx = int(round((center_rad - self.angle_min) / self.angle_increment))
+        hw = max(1, int(round(half_width_rad / self.angle_increment)))
+        best = 10.0
+        for k in range(idx - hw, idx + hw + 1):
+            r = self.ranges[k % n]
+            if self.range_min < r < best:   # r[:range_max] handled by best<10.0 cap
+                best = r
+        return best
 
     def find_frontiers(self):
         """Extract frontier cells (free cells adjacent to unknown cells) and cluster them."""
@@ -413,11 +448,12 @@ class AutoSlamExplorer(Node):
             # _avoid_step cleared avoid_mode: fall through to normal seeking
 
         # Trigger skirting when the path ahead is blocked
-        if self.front_dist < self.obstacle_distance:
+        if self.front_dist < self.skirt_trigger_dist:
             self.avoid_dir = self._choose_avoid_dir(heading_error)
             self.avoid_mode = True
             self.avoid_phase = 0
             self.avoid_start_yaw = self.robot_yaw
+            self.avoid_start_time = now_sec
             self.avoid_cum = 0.0
             self.stuck_counter += 1
             if self.stuck_counter > 25:  # Stuck for 2.5s
@@ -433,12 +469,12 @@ class AutoSlamExplorer(Node):
         self.stuck_counter = max(0, self.stuck_counter - 1)
 
         # Speed reduction ramp: clear path ahead -> sprint; near obstacle -> slow down
-        if self.front_dist > 1.5:
+        if self.front_dist > 1.0:
             speed_factor = 1.0
         else:
             speed_factor = max(0.0,
                                (self.front_dist - self.obstacle_distance) /
-                               (1.5 - self.obstacle_distance))
+                               (1.0 - self.obstacle_distance))
 
         # Heading-based control (proportional, angular velocity clamped to
         # angular_speed to avoid overshoot oscillation)
@@ -501,7 +537,12 @@ class AutoSlamExplorer(Node):
             return True
 
         # Phase 1: skirting — creep forward along the obstacle with a gentle
-        # persistent turn in the avoid direction.
+        # persistent turn in the avoid direction. The robot resumes goal
+        # seeking ONLY when the direction toward the goal is actually clear:
+        # if we exit just because the FRONT happens to be open, the seek
+        # controller swings us straight back into the obstacle we just skirted
+        # (wall beside the robot, goal still behind it) and the flip-flop
+        # returns. So gate the exit on the lidar range along the goal bearing.
         if self.front_dist < self.obstacle_distance:
             # Obstacle ahead again (turning around a corner): back to phase 0
             self.avoid_phase = 0
@@ -510,24 +551,29 @@ class AutoSlamExplorer(Node):
             twist.angular.z = self.avoid_dir * self.angular_speed
             return True
 
-        # Resume goal seeking only when the way ahead is genuinely open:
-        # - an open corridor in front, OR
-        # - the goal is nearly straight ahead with a clear immediate front
         dx = self.current_target[0] - self.robot_x
         dy = self.current_target[1] - self.robot_y
         goal_heading = math.atan2(dy, dx)
         hl = goal_heading - self.robot_yaw
         goal_error = (hl + math.pi) % (2.0 * math.pi) - math.pi
 
-        if self.front_dist >= 1.5:
-            self.avoid_mode = False
-            return False
-        if abs(goal_error) < 0.3 and self.front_dist >= 0.8:
+        if self.range_in_sector(goal_error) >= 1.2 and self.front_dist >= 0.8:
+            # Goal bearing is genuinely open again: stop skirting, resume seek
             self.avoid_mode = False
             return False
 
+        # Guard against pathological cases (e.g. the goal lies on the far side
+        # of an enormous wall): give up on this target after skirting long
+        # enough and let global frontier selection pick something reachable.
+        if now_sec - self.avoid_start_time > 60.0:
+            self.avoid_mode = False
+            self._begin_recovery(now_sec, reason='skirting made no progress toward target')
+            twist.linear.x = 0.0
+            twist.angular.z = 0.0
+            return True
+
         twist.linear.x = self.linear_speed * 0.55
-        nudge = min(1.0, max(0.0, (1.5 - self.front_dist) / 1.5))
+        nudge = min(1.0, max(0.0, (1.0 - self.front_dist) / 1.0))
         twist.angular.z = self.avoid_dir * (self.angular_speed * 0.5) * nudge
         return True
 
