@@ -57,9 +57,14 @@ class AutoSlamExplorer(Node):
         self.outward_bias_distance = 1.5   # meters — frontiers beyond this are 'outward'
         self.outward_bias_factor = 0.35    # score multiplier for inward (near) frontiers
 
-        # Obstacle-shield turn persistence (dwell lock against left/right flip-flop)
-        self.turn_lock_direction = 0.0
-        self.turn_lock_until = 0.0
+        # Obstacle skirting state machine (Bug-0 style): once triggered, the
+        # robot commits to going around the obstacle instead of oscillating
+        # between 'turn away' and 'realign to goal'
+        self.avoid_mode = False
+        self.avoid_phase = 0   # 0 = rotating to clear, 1 = skirting along the obstacle
+        self.avoid_dir = 1.0   # +1 turns left, -1 turns right
+        self.avoid_start_yaw = 0.0
+        self.avoid_cum = 0.0   # cumulative rotation in avoid_dir (rad)
 
         # Robot state
         self.robot_x = 0.0
@@ -399,60 +404,132 @@ class AutoSlamExplorer(Node):
         twist = Twist()
         now_sec = self.get_clock().now().nanoseconds / 1e9
 
-        # LIDAR Obstacle Avoidance Shield
+        # ----- Obstacle skirting state machine (Bug-0 style) -----
+        if self.avoid_mode:
+            if self._avoid_step(twist):
+                self.last_cmd_linear = twist.linear.x
+                self.cmd_vel_pub.publish(twist)
+                return
+            # _avoid_step cleared avoid_mode: fall through to normal seeking
+
+        # Trigger skirting when the path ahead is blocked
         if self.front_dist < self.obstacle_distance:
-            # Obstacle directly ahead. Commit to a turn direction for a short
-            # dwell so the lidar re-evaluation doesn't flip left/right every tick.
-            if now_sec >= self.turn_lock_until:
-                # Prefer turning toward the target side unless that side is also blocked
-                if heading_error >= 0.0:
-                    self.turn_lock_direction = 1.0
-                    if self.left_dist < self.obstacle_distance * 2.0:
-                        self.turn_lock_direction = -1.0
-                else:
-                    self.turn_lock_direction = -1.0
-                    if self.right_dist < self.obstacle_distance * 2.0:
-                        self.turn_lock_direction = 1.0
-                self.turn_lock_until = now_sec + 0.4
-
-            twist.linear.x = 0.0
-            twist.angular.z = self.turn_lock_direction * self.angular_speed
-            self.last_cmd_linear = 0.0
-
+            self.avoid_dir = self._choose_avoid_dir(heading_error)
+            self.avoid_mode = True
+            self.avoid_phase = 0
+            self.avoid_start_yaw = self.robot_yaw
+            self.avoid_cum = 0.0
             self.stuck_counter += 1
             if self.stuck_counter > 25:  # Stuck for 2.5s
-                self._begin_recovery(now_sec, reason='robot trapped by obstacle (shield)')
+                self._begin_recovery(now_sec, reason='robot trapped by obstacle (skirting)')
                 return
+
+            twist.linear.x = 0.0
+            twist.angular.z = self.avoid_dir * self.angular_speed
+            self.last_cmd_linear = 0.0
+            self.cmd_vel_pub.publish(twist)
+            return
+
+        self.stuck_counter = max(0, self.stuck_counter - 1)
+
+        # Speed reduction ramp: clear path ahead -> sprint; near obstacle -> slow down
+        if self.front_dist > 1.5:
+            speed_factor = 1.0
         else:
-            self.stuck_counter = max(0, self.stuck_counter - 1)
+            speed_factor = max(0.0,
+                               (self.front_dist - self.obstacle_distance) /
+                               (1.5 - self.obstacle_distance))
 
-            # Speed reduction ramp: clear path ahead -> sprint; near obstacle -> slow down
-            if self.front_dist > 1.5:
-                speed_factor = 1.0
-            else:
-                speed_factor = max(0.0,
-                                   (self.front_dist - self.obstacle_distance) /
-                                   (1.5 - self.obstacle_distance))
-
-            # Heading-based control (proportional, angular velocity clamped to
-            # angular_speed to avoid overshoot oscillation)
-            if abs(heading_error) > 1.4:
-                # Very sharp turn: stop and rotate in place
-                twist.linear.x = 0.0
-                twist.angular.z = self.angular_speed if heading_error > 0 else -self.angular_speed
-            elif abs(heading_error) > 0.15:
-                # Moderate heading error: proportional steering while easing forward
-                twist.linear.x = self.linear_speed * math.cos(heading_error) * speed_factor
-                ang = 1.5 * heading_error
-                twist.angular.z = math.copysign(min(abs(ang), self.angular_speed), ang)
-            else:
-                # Nearly straight: sprint at max speed with light corrective steering
-                twist.linear.x = self.max_linear_speed * speed_factor
-                ang = 1.0 * heading_error
-                twist.angular.z = math.copysign(min(abs(ang), self.angular_speed), ang)
+        # Heading-based control (proportional, angular velocity clamped to
+        # angular_speed to avoid overshoot oscillation)
+        if abs(heading_error) > 1.4:
+            # Very sharp turn: stop and rotate in place
+            twist.linear.x = 0.0
+            twist.angular.z = self.angular_speed if heading_error > 0 else -self.angular_speed
+        elif abs(heading_error) > 0.15:
+            # Moderate heading error: proportional steering while easing forward
+            twist.linear.x = self.linear_speed * math.cos(heading_error) * speed_factor
+            ang = 1.5 * heading_error
+            twist.angular.z = math.copysign(min(abs(ang), self.angular_speed), ang)
+        else:
+            # Nearly straight: sprint at max speed with light corrective steering
+            twist.linear.x = self.max_linear_speed * speed_factor
+            ang = 1.0 * heading_error
+            twist.angular.z = math.copysign(min(abs(ang), self.angular_speed), ang)
 
         self.last_cmd_linear = twist.linear.x
         self.cmd_vel_pub.publish(twist)
+
+    def _choose_avoid_dir(self, heading_error):
+        """Pick the skirting direction: turn toward the goal side when it is
+        open enough, otherwise toward the more open side."""
+        if heading_error >= 0.0 and self.left_dist > self.obstacle_distance * 2.0:
+            return 1.0
+        if heading_error < 0.0 and self.right_dist > self.obstacle_distance * 2.0:
+            return -1.0
+        return 1.0 if self.left_dist >= self.right_dist else -1.0
+
+    def _avoid_step(self, twist):
+        """Advance one tick of the skirting state machine.
+
+        Returns True if a motor command was set (still skirting), or False
+        after clearing avoid_mode because the way is genuinely clear.
+        """
+        now_sec = self.get_clock().now().nanoseconds / 1e9
+
+        if self.avoid_phase == 0:
+            # Rotate in place until we have cleared the obstacle: a minimum
+            # rotation AND an open front ahead. Commits past the 0.4s dwell.
+            self.avoid_cum += self.avoid_dir * self.angular_speed * 0.1
+            if self.front_dist > 0.6 and abs(self.avoid_cum) >= 0.7:
+                self.avoid_phase = 1
+                self.avoid_cum = 0.0
+                twist.linear.x = self.linear_speed * 0.5
+                twist.angular.z = self.avoid_dir * self.angular_speed * 0.6
+                return True
+
+            if abs(self.avoid_cum) > math.pi:
+                # Rotated a full turn without clearing anything: escalate
+                self.avoid_mode = False
+                self._begin_recovery(now_sec, reason='no clearance found while skirting')
+                twist.linear.x = 0.0
+                twist.angular.z = 0.0
+                return True
+
+            twist.linear.x = 0.0
+            twist.angular.z = self.avoid_dir * self.angular_speed
+            return True
+
+        # Phase 1: skirting — creep forward along the obstacle with a gentle
+        # persistent turn in the avoid direction.
+        if self.front_dist < self.obstacle_distance:
+            # Obstacle ahead again (turning around a corner): back to phase 0
+            self.avoid_phase = 0
+            self.avoid_cum = 0.0
+            twist.linear.x = 0.0
+            twist.angular.z = self.avoid_dir * self.angular_speed
+            return True
+
+        # Resume goal seeking only when the way ahead is genuinely open:
+        # - an open corridor in front, OR
+        # - the goal is nearly straight ahead with a clear immediate front
+        dx = self.current_target[0] - self.robot_x
+        dy = self.current_target[1] - self.robot_y
+        goal_heading = math.atan2(dy, dx)
+        hl = goal_heading - self.robot_yaw
+        goal_error = (hl + math.pi) % (2.0 * math.pi) - math.pi
+
+        if self.front_dist >= 1.5:
+            self.avoid_mode = False
+            return False
+        if abs(goal_error) < 0.3 and self.front_dist >= 0.8:
+            self.avoid_mode = False
+            return False
+
+        twist.linear.x = self.linear_speed * 0.55
+        nudge = min(1.0, max(0.0, (1.5 - self.front_dist) / 1.5))
+        twist.angular.z = self.avoid_dir * (self.angular_speed * 0.5) * nudge
+        return True
 
     def _begin_recovery(self, now_sec, reason='robot stuck'):
         """Bypass the current target and start the two-phase recovery maneuver."""
