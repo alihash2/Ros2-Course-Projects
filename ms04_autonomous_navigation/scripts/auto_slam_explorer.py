@@ -77,6 +77,12 @@ class AutoSlamExplorer(Node):
         self.right_dist = 10.0
         self.scan_received = False
 
+        # Odometry velocity (used for odom-based stuck detection)
+        self.odom_lin_vel = 0.0
+        self.last_cmd_linear = 0.0
+        self.slow_ticks = 0
+        self.slow_stuck_threshold = 15  # 1.5s of commanded motion without travel
+
         # Navigation state
         self.current_target = None
         self.target_start_time = 0.0
@@ -89,7 +95,8 @@ class AutoSlamExplorer(Node):
         self.map_saved = False
         self.stuck_counter = 0
         self.recovery_mode = False
-        self.recovery_end_time = 0.0
+        self.recovery_phase = 0          # 0 = backing up straight, 1 = rotating in place
+        self.recovery_phase_end = 0.0
 
         # QoS Profiles
         map_qos = QoSProfile(
@@ -130,6 +137,7 @@ class AutoSlamExplorer(Node):
         siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
         cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
         self.robot_yaw = math.atan2(siny_cosp, cosy_cosp)
+        self.odom_lin_vel = msg.twist.twist.linear.x
         self.odom_received = True
 
     def scan_callback(self, msg: LaserScan):
@@ -300,18 +308,23 @@ class AutoSlamExplorer(Node):
             self.finish_exploration()
             return
 
-        # Handle Recovery Mode
+        # Handle Recovery Mode (two-phase: back up straight, then rotate in place)
         if self.recovery_mode:
-            if now_sec < self.recovery_end_time:
-                # Back up and turn
-                twist = Twist()
-                twist.linear.x = -0.10
-                twist.angular.z = self.angular_speed
-                self.cmd_vel_pub.publish(twist)
-                return
+            twist = Twist()
+            if self.recovery_phase == 0:
+                twist.linear.x = -0.18
             else:
-                self.recovery_mode = False
-                self.current_target = None
+                twist.angular.z = self.angular_speed
+            self.cmd_vel_pub.publish(twist)
+
+            if now_sec >= self.recovery_phase_end:
+                if self.recovery_phase == 0:
+                    self.recovery_phase = 1
+                    self.recovery_phase_end = now_sec + 1.0
+                else:
+                    self.recovery_mode = False
+                    self.current_target = None
+            return
 
         # Check if we need a new target
         need_target = False
@@ -357,6 +370,17 @@ class AutoSlamExplorer(Node):
         # Reactive Motion Control toward target
         self.drive_towards_target()
 
+        # Odometry-based stuck detection: commanded to move forward but the
+        # robot is not actually traveling (handles wedging/grinding that the
+        # front-lidar shield cannot see).
+        if self.last_cmd_linear > 0.15 and abs(self.odom_lin_vel) < 0.02:
+            self.slow_ticks += 1
+        else:
+            self.slow_ticks = max(0, self.slow_ticks - 1)
+
+        if self.slow_ticks > self.slow_stuck_threshold and not self.recovery_mode:
+            self._begin_recovery(now_sec, reason='commanded motion without travel (odom)')
+
     def drive_towards_target(self):
         if not self.current_target:
             return
@@ -393,13 +417,11 @@ class AutoSlamExplorer(Node):
 
             twist.linear.x = 0.0
             twist.angular.z = self.turn_lock_direction * self.angular_speed
+            self.last_cmd_linear = 0.0
 
             self.stuck_counter += 1
             if self.stuck_counter > 25:  # Stuck for 2.5s
-                self.get_logger().warn('Robot trapped by obstacle! Initiating recovery maneuver.')
-                self.recovery_mode = True
-                self.recovery_end_time = now_sec + 2.5
-                self.stuck_counter = 0
+                self._begin_recovery(now_sec, reason='robot trapped by obstacle (shield)')
                 return
         else:
             self.stuck_counter = max(0, self.stuck_counter - 1)
@@ -429,7 +451,20 @@ class AutoSlamExplorer(Node):
                 ang = 1.0 * heading_error
                 twist.angular.z = math.copysign(min(abs(ang), self.angular_speed), ang)
 
+        self.last_cmd_linear = twist.linear.x
         self.cmd_vel_pub.publish(twist)
+
+    def _begin_recovery(self, now_sec, reason='robot stuck'):
+        """Bypass the current target and start the two-phase recovery maneuver."""
+        self.get_logger().warn(f'Initiating recovery: {reason}.')
+        self.recovery_mode = True
+        self.recovery_phase = 0
+        self.recovery_phase_end = now_sec + 1.0
+        self.stuck_counter = 0
+        self.slow_ticks = 0
+        if self.current_target is not None:
+            self.record_visited_frontier(self.current_target, now_sec)
+            self.current_target = None
 
     def finish_exploration(self):
         self.is_exploring = False
