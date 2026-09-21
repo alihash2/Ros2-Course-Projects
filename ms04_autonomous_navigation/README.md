@@ -5,6 +5,8 @@ ROS 2 package for autonomous navigation with GUI interfaces across custom Gazebo
 ## Features
 - Custom Gazebo simulation worlds for Office and Warehouse layouts.
 - Autonomous SLAM mapping and automated map saving.
+- Environment-specific AMCL localization and Nav2 tuning (office vs warehouse).
+- Modular launch files: a shared Nav2 server stack + per-phase/environment bringups.
 - Unified Nav2 coordinator supporting single Go-To-Pose and Multi-Waypoint routes from a single command.
 - Action-server event logging for all lifecycle transitions.
 - Controls for starting, cancelling, pausing, resuming, and replacing goals.
@@ -69,11 +71,50 @@ ros2 action send_goal /execute_mission ms04_autonomous_navigation/action/Execute
 ```
 
 ### Nav2 launch notes
-`launch/office_navigation.launch.py` starts both Nav2 action servers required
-by the coordinator: `bt_navigator` (`NavigateToPose`) and `waypoint_follower`
-(`FollowWaypoints`, added in `nav2_exploration_params.yaml` under the
-`waypoint_follower:` block). Both are managed by the auto-started
-`lifecycle_manager_navigation`.
+`launch/nav2_servers.launch.py` is the shared, localization-agnostic Nav2
+server stack used by **both** the mapping and the navigation launches. It
+starts `bt_navigator` (`NavigateToPose`) and `waypoint_follower`
+(`FollowWaypoints`), plus the controller/planner/smoother/behavior servers,
+`velocity_smoother` and `collision_monitor`, all managed by the auto-started
+`lifecycle_manager_navigation`. Its `params_file` argument selects the phase
+and environment profile; `/map` and `map->odom` come from slam_toolbox during
+mapping and from `map_server` + AMCL during navigation.
+
+## Environment Navigation (AMCL)
+
+Once a map exists (`maps/office_map.yaml` / `maps/warehouse_map.yaml`), the
+navigation phase localizes with **AMCL** against that static map instead of
+SLAM. Each environment has its own tuned profile and bringup launch:
+
+| Environment | Params profile | Launch |
+|-------------|----------------|--------|
+| Office (narrow corridors, doorways, tight turns) | `params/office_nav2_params.yaml` | `launch/office_navigation.launch.py` |
+| Warehouse (long straights, pallet clearance, higher speed) | `params/warehouse_nav2_params.yaml` | `launch/warehouse_navigation.launch.py` |
+
+Each launch starts Gazebo + `nav2_servers` (env params) + `map_server` +
+`amcl` (localization lifecycle) + the issue-4 `navigation_coordinator_node` +
+RViz (`rviz/nav2_gui_view.rviz`).
+
+```bash
+# Office navigation (add gui:=false to run headless)
+ros2 launch ms04_autonomous_navigation office_navigation.launch.py
+
+# Warehouse navigation
+ros2 launch ms04_autonomous_navigation warehouse_navigation.launch.py
+```
+
+### Tuning philosophy
+- **Office = complex tune** — `max_vel_x 0.5`, `max_vel_theta 1.2`, larger
+  global inflation (`0.8`) and `xy_goal_tolerance 0.25` for doorway-level
+  precision; extra recovery headroom (`movement_time_allowance 10 s`).
+- **Warehouse = fast tune** — `max_vel_x 0.9`, `max_vel_theta 1.8`, higher
+  accel/decel, longer `sim_time 2.2`, larger local inflation (`0.6`) to sweep
+  wide of pallet racks.
+- Both set AMCL `set_initial_pose: true` at `(0,0,0)`; the saved maps are
+  anchored at the robot spawn, so no manual 2D Pose Estimate is required.
+- The RViz profile shows robot model, global/local costmaps, global/local
+  planned paths, waypoint markers (published by the coordinator on
+  `/navigation/waypoints_marker`) and the 2D Pose Estimate / 2D Goal tools.
 
 ## Autonomous SLAM Exploration (primary mapping workflow)
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Launch AMCL-based navigation in the OFFICE environment.
+"""Launch AMCL-based navigation in the WAREHOUSE environment.
 
 Architecture:
-  1. office_simulation       -> Gazebo office world + TurtleBot3 + relay
-  2. nav2_servers            -> shared Nav2 stack with office_tuned params
-  3. map_server              -> static map from maps/office_map.yaml
+  1. warehouse_simulation    -> Gazebo warehouse world + TurtleBot3 + relay
+  2. nav2_servers            -> shared Nav2 stack with warehouse_tuned params
+  3. map_server              -> static map from maps/warehouse_map.yaml
   4. amcl                    -> particle-filter localization (map -> odom TF)
   5. navigation_coordinator  -> unified mission/action control (issue 4)
   6. rviz2 (nav2_gui_view)   -> robot model, costmaps, paths, waypoint markers
@@ -29,11 +29,11 @@ def generate_launch_description():
     gui = LaunchConfiguration('gui', default='true')
     params_file = LaunchConfiguration(
         'params_file',
-        default=os.path.join(pkg_ms04, 'params', 'office_nav2_params.yaml')
+        default=os.path.join(pkg_ms04, 'params', 'warehouse_nav2_params.yaml')
     )
     map_yaml = LaunchConfiguration(
         'map',
-        default=os.path.join(pkg_ms04, 'maps', 'office_map.yaml')
+        default=os.path.join(pkg_ms04, 'maps', 'warehouse_map.yaml')
     )
 
     declare_sim_time = DeclareLaunchArgument('use_sim_time', default_value='true')
@@ -42,22 +42,22 @@ def generate_launch_description():
                                         description='Set false to run Gazebo headless')
     declare_params = DeclareLaunchArgument(
         'params_file',
-        default_value=os.path.join(pkg_ms04, 'params', 'office_nav2_params.yaml')
+        default_value=os.path.join(pkg_ms04, 'params', 'warehouse_nav2_params.yaml')
     )
     declare_map = DeclareLaunchArgument(
         'map',
-        default_value=os.path.join(pkg_ms04, 'maps', 'office_map.yaml')
+        default_value=os.path.join(pkg_ms04, 'maps', 'warehouse_map.yaml')
     )
 
     remappings = [('/tf', 'tf'), ('/tf_static', 'tf_static')]
 
-    office_sim = IncludeLaunchDescription(
+    warehouse_sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(pkg_ms04, 'launch', 'office_simulation.launch.py')
+            os.path.join(pkg_ms04, 'launch', 'warehouse_simulation.launch.py')
         ),
         launch_arguments={
             'use_sim_time': use_sim_time,
-            'x_pose': '0.0',
+            'x_pose': '-6.0',
             'y_pose': '0.0',
             'gui': gui
         }.items()
@@ -127,7 +127,7 @@ def generate_launch_description():
         declare_gui,
         declare_params,
         declare_map,
-        office_sim,
+        warehouse_sim,
         nav2_stack,
         map_server,
         amcl,
