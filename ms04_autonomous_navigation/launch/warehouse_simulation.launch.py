@@ -62,15 +62,27 @@ def generate_launch_description():
         launch_arguments={'use_sim_time': use_sim_time}.items()
     )
 
-    # Spawn TurtleBot3
-    spawn_turtlebot_cmd = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(pkg_turtlebot3_gazebo, 'launch', 'spawn_turtlebot3.launch.py')
-        ),
-        launch_arguments={
-            'x_pose': x_pose,
-            'y_pose': y_pose
-        }.items()
+    # Gazebo ↔ ROS 2 bridge (clock, odom, tf, scan, cmd_vel, imu, joint_states)
+    bridge_params = os.path.join(
+        pkg_turtlebot3_gazebo, 'params', 'turtlebot3_waffle_bridge.yaml'
+    )
+    ros_gz_bridge_cmd = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        arguments=['--ros-args', '-p', f'config_file:={bridge_params}'],
+        output='screen',
+    )
+
+    # Spawn TurtleBot3 — custom model with the lidar max range extended to
+    # 8.0 m (RPLIDAR A2M8-class, the standard replacement lidar for this class
+    # of indoor SLAM robot; stock LDS-02 only reaches 3.5 m).
+    our_model = os.path.join(pkg_ms04, 'models', 'turtlebot3_waffle', 'model.sdf')
+    spawn_turtlebot_cmd = Node(
+        package='ros_gz_sim',
+        executable='create',
+        arguments=['-name', 'waffle', '-file', our_model,
+                   '-x', x_pose, '-y', y_pose, '-z', '0.01'],
+        output='screen'
     )
 
     # Relay for cmd_vel: bridges standard geometry_msgs/Twist on /cmd_vel_raw to TwistStamped on /cmd_vel
@@ -97,6 +109,7 @@ def generate_launch_description():
     ld.add_action(declare_sim_time)
     ld.add_action(gzserver_cmd)
     ld.add_action(gzclient_cmd)
+    ld.add_action(ros_gz_bridge_cmd)
     ld.add_action(robot_state_publisher_cmd)
     ld.add_action(spawn_turtlebot_cmd)
     ld.add_action(cmd_vel_relay_node)
