@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Launch Nav2 navigation stack for autonomous SLAM exploration (office).
 
-Starts only the servers needed for NavigateToPose during frontier exploration:
+Starts the servers needed for NavigateToPose and FollowWaypoints:
   - planner_server (NavFN, allow_unknown so it can plan toward frontier goals)
   - controller_server (DWB local planner)
   - smoother_server
   - behavior_server (recoveries)
   - bt_navigator (NavigateToPose action server)
+  - waypoint_follower (FollowWaypoints action server)
   - velocity_smoother (caps cmd_vel to modest limits)
   - collision_monitor (last-chance stop before /cmd_vel_relay)
 Wrapped in a LifecycleManager with autostart.
@@ -53,6 +54,7 @@ def generate_launch_description():
         'planner_server',
         'behavior_server',
         'bt_navigator',
+        'waypoint_follower',
         'velocity_smoother',
         'collision_monitor',
     ]
@@ -102,6 +104,15 @@ def generate_launch_description():
         remappings=remappings,
     )
 
+    waypoint_follower = Node(
+        package='nav2_waypoint_follower',
+        executable='waypoint_follower',
+        name='waypoint_follower',
+        output='screen',
+        parameters=[params_file, {'default_bt_xml_filename': default_bt_xml}],
+        remappings=remappings,
+    )
+
     velocity_smoother = Node(
         package='nav2_velocity_smoother',
         executable='velocity_smoother',
@@ -142,6 +153,7 @@ def generate_launch_description():
         planner_server,
         behavior_server,
         bt_navigator,
+        waypoint_follower,
         velocity_smoother,
         collision_monitor,
         lifecycle_manager,

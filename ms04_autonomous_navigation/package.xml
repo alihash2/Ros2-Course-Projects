@@ -23,6 +23,7 @@
   <exec_depend>rosidl_default_runtime</exec_depend>
   <exec_depend>slam_toolbox</exec_depend>
   <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>nav2_waypoint_follower</exec_depend>
   <exec_depend>turtlebot3_gazebo</exec_depend>
   <exec_depend>ros_gz_bridge</exec_depend>
 
