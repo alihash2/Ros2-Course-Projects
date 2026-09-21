@@ -56,10 +56,11 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
 )
 
-# Install directories for launch, worlds, maps, params, rviz
+# Install directories for launch, worlds, models, maps, params, rviz
 install(DIRECTORY
   launch
   worlds
+  models
   maps
   params
   rviz

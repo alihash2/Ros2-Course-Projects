@@ -204,17 +204,6 @@
           <material><ambient>0.15 0.25 0.5 1</ambient><diffuse>0.2 0.35 0.65 1</diffuse></material>
         </visual>
 
-        <!-- Cross-rack chokepoint at north end (horizontal, creates bottleneck) -->
-        <collision name="cross_rack_col">
-          <pose>3.5 7.0 1.25 0 0 0</pose>
-          <geometry><box><size>3.0 0.5 2.5</size></box></geometry>
-        </collision>
-        <visual name="cross_rack_vis">
-          <pose>3.5 7.0 1.25 0 0 0</pose>
-          <geometry><box><size>3.0 0.5 2.5</size></box></geometry>
-          <material><ambient>0.15 0.25 0.5 1</ambient><diffuse>0.2 0.35 0.65 1</diffuse></material>
-        </visual>
-
         <!-- ============================================ -->
         <!-- WEST LOADING BAY — HIGH density, scattered   -->
         <!-- ============================================ -->
@@ -241,17 +230,6 @@
           <material><ambient>0.55 0.4 0.2 1</ambient><diffuse>0.6 0.45 0.25 1</diffuse></material>
         </visual>
 
-        <!-- Pallet Stack C (different shape, further south) -->
-        <collision name="pallet_C_col">
-          <pose>-6.5 -5.5 0.5 0 0 0</pose>
-          <geometry><box><size>1.0 1.8 1.0</size></box></geometry>
-        </collision>
-        <visual name="pallet_C_vis">
-          <pose>-6.5 -5.5 0.5 0 0 0</pose>
-          <geometry><box><size>1.0 1.8 1.0</size></box></geometry>
-          <material><ambient>0.5 0.38 0.22 1</ambient><diffuse>0.55 0.42 0.27 1</diffuse></material>
-        </visual>
-
         <!-- Drum near Pallet A -->
         <collision name="drum_west_A_col">
           <pose>-5.5 2.0 0.5 0 0 0</pose>
@@ -261,17 +239,6 @@
           <pose>-5.5 2.0 0.5 0 0 0</pose>
           <geometry><cylinder><radius>0.35</radius><length>1.0</length></cylinder></geometry>
           <material><ambient>0.7 0.15 0.15 1</ambient><diffuse>0.8 0.2 0.2 1</diffuse></material>
-        </visual>
-
-        <!-- Drum near Pallet C -->
-        <collision name="drum_west_C_col">
-          <pose>-5.5 -4.0 0.5 0 0 0</pose>
-          <geometry><cylinder><radius>0.35</radius><length>1.0</length></cylinder></geometry>
-        </collision>
-        <visual name="drum_west_C_vis">
-          <pose>-5.5 -4.0 0.5 0 0 0</pose>
-          <geometry><cylinder><radius>0.35</radius><length>1.0</length></cylinder></geometry>
-          <material><ambient>0.15 0.4 0.7 1</ambient><diffuse>0.2 0.5 0.8 1</diffuse></material>
         </visual>
 
         <!-- Pallet jack (low obstacle, east of spawn point) -->

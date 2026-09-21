@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""Launch file for autonomous SLAM mapping in the Warehouse environment."""
+"""Launch file for autonomous SLAM mapping in the Warehouse environment.
+
+Identical Nav2 + explore-lite frontier exploration stack as office_mapping —
+only the world, spawn pose, and office/world census window change.
+Architecture:
+  1. warehouse_simulation   -> Gazebo warehouse world + TurtleBot3 (12 m lidar)
+  2. slam_toolbox (async)   -> /map + map->odom TF
+  3. office_navigation      -> Nav2 stack (planner, DWB controller, smoother,
+                                behaviors, BT navigator, velocity smoother,
+                                collision monitor) — owns ALL robot motion
+  4. auto_slam_explorer     -> frontier detection + NavigateToPose goals + auto-save
+  5. rviz2                  -> live visualization
+"""
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -24,25 +36,7 @@ def generate_launch_description():
         'map_save_path',
         default=os.path.expanduser('~/ros2_ws/src/ms04_autonomous_navigation/maps/warehouse_map')
     )
-    max_exploration_time = LaunchConfiguration('max_exploration_time', default='300.0')
-
-    # Declare launch arguments
-    declare_sim_time = DeclareLaunchArgument('use_sim_time', default_value='true')
-    declare_slam_params = DeclareLaunchArgument(
-        'slam_params_file',
-        default_value=os.path.join(pkg_ms04, 'params', 'slam_toolbox_params.yaml'),
-        description='Full path to slam_toolbox parameters file'
-    )
-    declare_map_save_path = DeclareLaunchArgument(
-        'map_save_path',
-        default_value=os.path.expanduser('~/ros2_ws/src/ms04_autonomous_navigation/maps/warehouse_map'),
-        description='Base path (no extension) to save generated map'
-    )
-    declare_max_time = DeclareLaunchArgument(
-        'max_exploration_time',
-        default_value='300.0',
-        description='Max seconds for autonomous exploration before saving map'
-    )
+    max_exploration_time = LaunchConfiguration('max_exploration_time', default='900.0')
 
     # 1. Launch the warehouse Gazebo simulation
     warehouse_sim = IncludeLaunchDescription(
@@ -68,7 +62,18 @@ def generate_launch_description():
         }.items()
     )
 
-    # 3. Autonomous frontier explorer + auto map saver
+    # 3. Nav2 navigation stack — owns ALL motion (planner + DWB + recoveries)
+    nav2_stack = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg_ms04, 'launch', 'office_navigation.launch.py')
+        ),
+        launch_arguments={
+            'use_sim_time': use_sim_time,
+            'autostart': 'true'
+        }.items()
+    )
+
+    # 4. Autonomous frontier explorer + auto map saver (drives Nav2, no cmd_vel)
     auto_explorer_node = Node(
         package='ms04_autonomous_navigation',
         executable='auto_slam_explorer.py',
@@ -78,16 +83,21 @@ def generate_launch_description():
             'use_sim_time': True,
             'map_save_path': map_save_path,
             'max_exploration_time': ParameterValue(max_exploration_time, value_type=float),
-            'linear_speed': 0.35,
-            'max_linear_speed': 0.6,
-            'angular_speed': 0.8,
             'min_frontier_size': 6,
-            'obstacle_distance': 0.35,
-            'auto_save': True
+            'auto_save': True,
+            'gain_scale': 1.0,          # explore-lite: size dominates
+            'potential_scale': 0.001,   # slight preference for closer goals
+            'orientation_scale': 0.0,   # ignore orientation
+            'progress_timeout': 300.0,  # abort a Nav2 goal that never succeeds
+            # warehouse.world spans x in [-10,10], y in [-9,9]
+            'office_lox': -10.0,
+            'office_loy': -9.0,
+            'office_hix': 10.0,
+            'office_hiy': 9.0
         }]
     )
 
-    # 4. RViz2 for live map + robot visualization
+    # 5. RViz2 for live map + robot visualization
     rviz_config = os.path.join(pkg_ms04, 'rviz', 'mapping.rviz')
     rviz_node = Node(
         package='rviz2',
@@ -97,13 +107,23 @@ def generate_launch_description():
         output='screen'
     )
 
-    ld = LaunchDescription()
-    ld.add_action(declare_sim_time)
-    ld.add_action(declare_slam_params)
-    ld.add_action(declare_map_save_path)
-    ld.add_action(declare_max_time)
-    ld.add_action(warehouse_sim)
-    ld.add_action(slam_toolbox_node)
-    ld.add_action(auto_explorer_node)
-    ld.add_action(rviz_node)
-    return ld
+    return LaunchDescription([
+        DeclareLaunchArgument('use_sim_time', default_value='true'),
+        DeclareLaunchArgument(
+            'slam_params_file',
+            default_value=os.path.join(pkg_ms04, 'params', 'slam_toolbox_params.yaml')
+        ),
+        DeclareLaunchArgument(
+            'map_save_path',
+            default_value=os.path.expanduser('~/ros2_ws/src/ms04_autonomous_navigation/maps/warehouse_map')
+        ),
+        DeclareLaunchArgument(
+            'max_exploration_time',
+            default_value='900.0'
+        ),
+        warehouse_sim,
+        slam_toolbox_node,
+        nav2_stack,
+        auto_explorer_node,
+        rviz_node,
+    ])
