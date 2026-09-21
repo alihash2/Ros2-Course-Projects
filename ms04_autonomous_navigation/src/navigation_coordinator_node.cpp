@@ -34,6 +34,9 @@ NavigationCoordinatorNode::NavigationCoordinatorNode(const rclcpp::NodeOptions &
     // ---- Publishers ----
     event_pub_ = this->create_publisher<NavigationEvent>("/navigation/events", 10);
     status_pub_ = this->create_publisher<NavigationStatus>("/navigation/status", 10);
+    waypoint_marker_pub_ =
+        this->create_publisher<visualization_msgs::msg::MarkerArray>(
+            "/navigation/waypoints_marker", 10);
 
     // ---- Mission command dispatcher ----
     mission_sub_ = this->create_subscription<NavigationMission>(
@@ -149,6 +152,7 @@ void NavigationCoordinatorNode::replace_mission(const NavigationMission::SharedP
 void NavigationCoordinatorNode::dispatch_mission(const MissionContext & ctx) {
     mission_ = ctx;
     state_ = MissionState::NAVIGATING;
+    publish_waypoint_markers();
 
     publish_navigation_event(
         NavigationEvent::EVENT_GOAL_SUBMITTED,
@@ -409,6 +413,7 @@ void NavigationCoordinatorNode::follow_result(const FollowWaypointsHandle::Wrapp
         mission_.remaining_waypoints = remaining;
         mission_.current_waypoint = 0;
         mission_.total_waypoints = mission_.waypoints.size();
+        publish_waypoint_markers();
         publish_status(MissionState::PAUSED, "mission paused at waypoint");
         return;
     }
@@ -534,6 +539,7 @@ void NavigationCoordinatorNode::finish_mission(
     }
     state_ = MissionState::IDLE;
     mission_ = MissionContext();
+    publish_waypoint_markers();
 }
 
 // ---------------------------------------------------------------------------
@@ -605,6 +611,67 @@ void NavigationCoordinatorNode::publish_status(MissionState state, const std::st
         case MissionState::ABORTED: status.state = NavigationStatus::STATE_ABORTED; break;
     }
     status_pub_->publish(status);
+}
+
+void NavigationCoordinatorNode::publish_waypoint_markers() {
+    visualization_msgs::msg::MarkerArray markers;
+
+    // Clear-all marker so stale waypoints disappear when a mission ends.
+    visualization_msgs::msg::Marker clear;
+    clear.header.stamp = this->now();
+    clear.header.frame_id = "map";
+    clear.action = visualization_msgs::msg::Marker::DELETEALL;
+    markers.markers.push_back(clear);
+
+    std::vector<geometry_msgs::msg::PoseStamped> points;
+    if (mission_.mode == NavigationMission::MODE_GO_TO_POSE) {
+        if (!mission_.mission_id.empty()) {
+            points.push_back(mission_.target_pose);
+        }
+    } else {
+        points = mission_.waypoints;
+    }
+
+    for (size_t i = 0; i < points.size(); ++i) {
+        const auto & p = points[i];
+
+        visualization_msgs::msg::Marker sphere;
+        sphere.header = p.header;
+        sphere.header.stamp = this->now();
+        sphere.header.frame_id = p.header.frame_id.empty() ? "map" : p.header.frame_id;
+        sphere.ns = "mission_waypoints";
+        sphere.id = static_cast<int>(i);
+        sphere.type = visualization_msgs::msg::Marker::SPHERE;
+        sphere.action = visualization_msgs::msg::Marker::ADD;
+        sphere.pose = p.pose;
+        sphere.pose.position.z = 0.05;
+        sphere.scale.x = 0.15;
+        sphere.scale.y = 0.15;
+        sphere.scale.z = 0.15;
+        sphere.color.r = 0.1f;
+        sphere.color.g = 0.9f;
+        sphere.color.b = 0.1f;
+        sphere.color.a = 0.9f;
+        markers.markers.push_back(sphere);
+
+        visualization_msgs::msg::Marker label;
+        label.header = sphere.header;
+        label.ns = "mission_waypoint_labels";
+        label.id = static_cast<int>(i);
+        label.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+        label.action = visualization_msgs::msg::Marker::ADD;
+        label.pose = p.pose;
+        label.pose.position.z = 0.4;
+        label.scale.z = 0.25;
+        label.color.r = 1.0f;
+        label.color.g = 1.0f;
+        label.color.b = 1.0f;
+        label.color.a = 1.0f;
+        label.text = std::to_string(i);
+        markers.markers.push_back(label);
+    }
+
+    waypoint_marker_pub_->publish(markers);
 }
 
 } // namespace ms04_autonomous_navigation

@@ -14,6 +14,7 @@ find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
 find_package(action_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
@@ -65,6 +66,7 @@ ament_target_dependencies(navigation_coordinator_node
   std_msgs
   builtin_interfaces
   action_msgs
+  visualization_msgs
 )
 target_link_libraries(navigation_coordinator_node ${cpp_typesupport_target})
 
@@ -100,6 +102,7 @@ ament_export_dependencies(
   geometry_msgs
   nav_msgs
   nav2_msgs
+  visualization_msgs
   action_msgs
   builtin_interfaces
 )

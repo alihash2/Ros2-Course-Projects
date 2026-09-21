@@ -4,9 +4,9 @@
 Architecture (industry-standard Nav2 + explore-lite frontier exploration):
   1. office_simulation      -> Gazebo office world + TurtleBot3 (12 m lidar) + relay
   2. slam_toolbox (async)   -> /map + map->odom TF
-  3. office_navigation      -> Nav2 stack (planner, DWB controller, smoother,
-                               behaviors, BT navigator, velocity smoother,
-                               collision monitor) — owns ALL robot motion
+3. nav2_servers           -> shared Nav2 stack (planner, DWB controller, smoother,
+                                behaviors, BT navigator, velocity smoother,
+                                collision monitor) — owns ALL robot motion
   4. auto_slam_explorer     -> frontier detection + NavigateToPose goals + auto-save
   5. rviz2                  -> live visualization
 """
@@ -81,7 +81,7 @@ def generate_launch_description():
     # 3. Nav2 navigation stack — owns ALL motion (planner + DWB + recoveries)
     nav2_stack = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(pkg_ms04, 'launch', 'office_navigation.launch.py')
+            os.path.join(pkg_ms04, 'launch', 'nav2_servers.launch.py')
         ),
         launch_arguments={
             'use_sim_time': use_sim_time,

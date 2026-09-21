@@ -10,6 +10,7 @@
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
+#include "visualization_msgs/msg/marker_array.hpp"
 
 #include "nav2_msgs/action/follow_waypoints.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
@@ -127,6 +128,7 @@ private:
         builtin_interfaces::msg::Duration eta, int16_t recoveries,
         uint32_t current_wp, uint32_t total_wp);
     void publish_status(MissionState state, const std::string & message);
+    void publish_waypoint_markers();
     void send_action_feedback(const std::string & status);
     void finish_mission(
         uint8_t result_event, bool success, const std::string & message);
@@ -147,6 +149,7 @@ private:
     rclcpp::Subscription<NavigationMission>::SharedPtr mission_sub_;
     rclcpp::Publisher<NavigationEvent>::SharedPtr event_pub_;
     rclcpp::Publisher<NavigationStatus>::SharedPtr status_pub_;
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr waypoint_marker_pub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
 
     MissionContext mission_;
