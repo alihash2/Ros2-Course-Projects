@@ -15,9 +15,65 @@ ROS 2 package for autonomous navigation with GUI interfaces across custom Gazebo
 ### Messages
 - `NavigationMission.msg`: Unified mission command message supporting `MODE_GO_TO_POSE` (0) and `MODE_WAYPOINTS` (1), along with execution control commands (`COMMAND_START`, `COMMAND_CANCEL`, `COMMAND_PAUSE`, `COMMAND_RESUME`, `COMMAND_REPLACE`).
 - `NavigationEvent.msg`: Telemetry and lifecycle event message (`EVENT_GOAL_SUBMITTED`, `EVENT_GOAL_ACCEPTED`, `EVENT_GOAL_REJECTED`, `EVENT_FEEDBACK`, `EVENT_GOAL_COMPLETED`, `EVENT_GOAL_CANCELED`, `EVENT_GOAL_ABORTED`, `EVENT_GOAL_PAUSED`, `EVENT_GOAL_RESUMED`, `EVENT_GOAL_REPLACED`).
+- `NavigationStatus.msg`: Live status snapshot of the coordinator (`STATE_IDLE`, `STATE_NAVIGATING`, `STATE_PAUSED`, `STATE_COMPLETED`, `STATE_CANCELED`, `STATE_ABORTED`) with current pose, remaining distance, ETA and waypoint indices.
 
 ### Actions
 - `ExecuteMission.action`: ROS 2 Action interface for mission execution with real-time feedback (current pose, distance remaining, ETA, recovery count, waypoint indices).
+
+## Navigation Coordinator Node
+
+`navigation_coordinator_node` is the unified dispatcher: it receives mission
+commands, dispatches them to the matching Nav2 navigator (single pose →
+`bt_navigator`/`NavigateToPose`, multi-waypoint → `waypoint_follower`/
+`FollowWaypoints`), implements the full control set, and logs every lifecycle
+transition and telemetry update.
+
+### Interface
+| Direction | Topic / Action | Interface |
+|-----------|----------------|-----------|
+| in | `/navigation/mission` (user commands) | `NavigationMission` |
+| out | `/navigation/events` (lifecycle + telemetry log) | `NavigationEvent` |
+| out | `/navigation/status` (state snapshot) | `NavigationStatus` |
+| in | `/execute_mission` (action server) | `ExecuteMission` |
+| out (action client) | `/navigate_to_pose` | nav2 `NavigateToPose` |
+| out (action client) | `/follow_waypoints` | nav2 `FollowWaypoints` |
+
+### Control commands
+- **Start** — dispatch a `Go-To-Pose` or `Waypoints` mission; rejected with an
+  event if a mission is already active (use Replace to preempt).
+- **Cancel** — terminate the active goal; the mission ends in `CANCELED`.
+  Works on navigating missions and on missions paused mid-route.
+- **Pause** — cancels the Nav2 goal and preserves the *remaining* waypoints
+  (or the held target pose); the mission holds in `PAUSED`.
+- **Resume** — re-dispatches the preserved goal from the pause point.
+- **Replace** — preempts the active goal and dispatches the new mission
+  (`EVENT_GOAL_REPLACED`).
+
+### Invocation
+```bash
+# terminal echo of all events and state
+ros2 topic echo /navigation/events ms04_autonomous_navigation/msg/NavigationEvent
+ros2 topic echo /navigation/status ms04_autonomous_navigation/msg/NavigationStatus
+
+# publish a go-to-pose mission
+ros2 topic pub --once /navigation/mission ms04_autonomous_navigation/msg/NavigationMission \
+  "{header: {stamp: {sec: 0}, frame_id: 'map'}, mission_id: 'demo', mode: 0, \
+    command: 0, target_pose: {header: {frame_id: 'map'}, pose: {position: {x: 2.0, y: 2.0}, orientation: {w: 1.0}}}}"
+
+# pause / resume / cancel while it runs (command enum: 0 start, 1 cancel, 2 pause, 3 resume, 4 replace)
+ros2 topic pub --once /navigation/mission ms04_autonomous_navigation/msg/NavigationMission "{header: {stamp: {sec: 0}, frame_id: 'map'}, command: 2}"
+
+# or use the action server with full feedback
+ros2 action send_goal /execute_mission ms04_autonomous_navigation/action/ExecuteMission \
+  "{mission_id: 'demo', mode: 0, target_pose: {header: {frame_id: 'map'}, pose: {position: {x: 2.0, y: 2.0}, orientation: {w: 1.0}}}}"
+```
+
+### Nav2 launch notes
+`launch/office_navigation.launch.py` starts both Nav2 action servers required
+by the coordinator: `bt_navigator` (`NavigateToPose`) and `waypoint_follower`
+(`FollowWaypoints`, added in `nav2_exploration_params.yaml` under the
+`waypoint_follower:` block). Both are managed by the auto-started
+`lifecycle_manager_navigation`.
 
 ## Autonomous SLAM Exploration (primary mapping workflow)
 

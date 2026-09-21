@@ -22,6 +22,7 @@ find_package(rosidl_default_generators REQUIRED)
 set(msg_files
   "msg/NavigationMission.msg"
   "msg/NavigationEvent.msg"
+  "msg/NavigationStatus.msg"
 )
 
 set(action_files
@@ -45,8 +46,31 @@ ament_target_dependencies(cmd_vel_relay
   geometry_msgs
 )
 
+# Build navigation coordinator node
+rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
+
+add_executable(navigation_coordinator_node
+  src/navigation_coordinator_node.cpp
+)
+target_include_directories(navigation_coordinator_node PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+ament_target_dependencies(navigation_coordinator_node
+  rclcpp
+  rclcpp_action
+  nav2_msgs
+  nav_msgs
+  geometry_msgs
+  std_msgs
+  builtin_interfaces
+  action_msgs
+)
+target_link_libraries(navigation_coordinator_node ${cpp_typesupport_target})
+
 install(TARGETS
   cmd_vel_relay
+  navigation_coordinator_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
