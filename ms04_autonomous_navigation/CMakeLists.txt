@@ -79,6 +79,7 @@ install(TARGETS
 # Install Python scripts
 install(PROGRAMS
   scripts/auto_slam_explorer.py
+  scripts/mission_control_gui.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
