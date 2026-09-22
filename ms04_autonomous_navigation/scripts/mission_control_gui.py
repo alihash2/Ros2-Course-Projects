@@ -20,6 +20,9 @@ import time
 import math
 from collections import OrderedDict
 
+if sys.platform.startswith('linux') and 'QT_QPA_PLATFORM' not in os.environ:
+    os.environ['QT_QPA_PLATFORM'] = 'xcb'
+
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
 from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import (
