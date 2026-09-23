@@ -135,6 +135,19 @@ ros2 run ms04_autonomous_navigation mission_control_gui
 | Mission Status | Live state, mission id, current pose, distance remaining, ETA, waypoint index |
 | Real-Time Navigation Log | Color-coded `NavigationEvent` + GUI command feed |
 
+- The log renders events as human-readable milestone lines. Nav2 telemetry
+  (`EVENT_FEEDBACK`) is throttled into compact progress lines ("waypoint 2/4",
+  "recovery #1 triggered", "3.2 m remaining · ETA ~9s") instead of flooding the
+  view at the 5 Hz tick rate; waypoint arrivals, recovery counts and distance
+  buckets are reported as they change.
+- Diagnostic status messages are surfaced automatically, e.g. *"start rejected:
+  mission already active"*, *"cancel ignored: no active mission"*, or *"mission
+  aborted: Failed to create plan..."* (the coordinator now passes Nav2's
+  `error_msg` through on aborts and emits `EVENT_GOAL_REJECTED` on refused
+  starts), so a problem is visible in the log instead of only in the terminal.
+- The GUI also pre-checks its known coordinator state and warns in the log when
+  a control button won't apply (e.g. Pause while idle).
+
 - Simulation is launched separately from Nav2: **Activate Nav2** reuses the
   environment navigation launch with `launch_sim:=false` (both navigation
   launches accept the new `launch_sim` argument), so the stack can attach to an

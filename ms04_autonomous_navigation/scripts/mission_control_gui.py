@@ -105,6 +105,24 @@ EVENT_COLORS = {
     NavigationEvent.EVENT_GOAL_REPLACED: QColor(156, 39, 176),
 }
 
+_EVENT_FALLBACK = {
+    NavigationEvent.EVENT_GOAL_SUBMITTED: 'mission submitted for execution',
+    NavigationEvent.EVENT_GOAL_ACCEPTED: 'mission accepted by Nav2',
+    NavigationEvent.EVENT_GOAL_REJECTED: 'mission rejected',
+    NavigationEvent.EVENT_FEEDBACK: '',
+    NavigationEvent.EVENT_GOAL_COMPLETED: 'mission completed',
+    NavigationEvent.EVENT_GOAL_CANCELED: 'mission canceled',
+    NavigationEvent.EVENT_GOAL_ABORTED: 'mission aborted',
+    NavigationEvent.EVENT_GOAL_PAUSED: 'mission paused',
+    NavigationEvent.EVENT_GOAL_RESUMED: 'mission resumed',
+    NavigationEvent.EVENT_GOAL_REPLACED: 'mission replaced',
+}
+
+# Status messages we want to surface in the log even though the events already
+# render the main flow -> anything that hints at a problem or a preemption.
+_DIAG_HINTS = ('ignored', 'reject', 'unavailable', 'failed', 'error',
+               'abort', 'replacing', 'paused at waypoint', 'recovery', 'stuck')
+
 
 def _yaw_to_quat(yaw):
     q = PoseStamped().pose.orientation
@@ -149,6 +167,11 @@ class MissionControlGUI(QMainWindow):
         self._mission_seq = 0
         self._spawned_procs = []
 
+        self._status_state = 'IDLE'
+        self._last_logged_line = ''
+        self._fb_ctx = {'mission': None, 'wp': -1,
+                        'bucket': 1 << 30, 'rec': -1, 'hb': 0.0}
+
         self._build_ros()
         self._build_ui()
 
@@ -158,7 +181,10 @@ class MissionControlGUI(QMainWindow):
         self._ros_thread.start()
 
         self._populate_env('office')
-        self._log('system', 'GUI ready. Select an environment and launch the simulation.')
+        self._log('system',
+                  'GUI ready. Select Environment, then: 1) Launch Simulation, '
+                  '2) Load Map + Activate Nav2, 3) Set Initial Pose, '
+                  '4) dispatch a goal below.')
 
     # ------------------------------------------------------------------ ROS
     def _build_ros(self):
@@ -498,6 +524,9 @@ class MissionControlGUI(QMainWindow):
         return (NavigationMission.MODE_WAYPOINTS, None, poses)
 
     def _on_start(self):
+        self._guard_state(
+            {'IDLE', 'COMPLETED', 'CANCELED', 'ABORTED', 'REJECTED'},
+            'Start may be rejected: a mission is already active (use Replace to preempt)')
         plan = self._current_plan()
         if plan is None:
             return
@@ -510,16 +539,22 @@ class MissionControlGUI(QMainWindow):
         self._log('command', f'START mission {mission_id} ({desc})')
 
     def _on_pause(self):
+        self._guard_state({'NAVIGATING'},
+                          'Pause needs an active (NAVIGATING) mission; coordinator may ignore')
         self._publish_mission(NavigationMission.COMMAND_PAUSE,
                               NavigationMission.MODE_GO_TO_POSE, self._next_mission_id())
         self._log('command', 'PAUSE sent')
 
     def _on_resume(self):
+        self._guard_state({'PAUSED'},
+                          'Resume needs a PAUSED mission; coordinator may ignore')
         self._publish_mission(NavigationMission.COMMAND_RESUME,
                               NavigationMission.MODE_GO_TO_POSE, self._next_mission_id())
         self._log('command', 'RESUME sent')
 
     def _on_cancel(self):
+        self._guard_state({'NAVIGATING', 'PAUSED'},
+                          'Cancel has no active mission to stop; coordinator may ignore')
         self._publish_mission(NavigationMission.COMMAND_CANCEL,
                               NavigationMission.MODE_GO_TO_POSE, self._next_mission_id())
         self._log('command', 'CANCEL sent')
@@ -554,18 +589,51 @@ class MissionControlGUI(QMainWindow):
     def _on_event(self, msg):
         name = EVENT_NAMES.get(msg.event_type, f'EVENT_{msg.event_type}')
         color = EVENT_COLORS.get(msg.event_type, QColor(255, 255, 255))
-        extra = ''
+        if msg.mission_id != self._fb_ctx['mission']:
+            self._fb_ctx = {'mission': msg.mission_id, 'wp': -1,
+                            'bucket': 1 << 30, 'rec': -1, 'hb': 0.0}
         if msg.event_type == NavigationEvent.EVENT_FEEDBACK:
-            extra = (f'  [dist {msg.distance_remaining:.2f} m, '
-                     f'wp {msg.current_waypoint}/{msg.total_waypoints}, '
-                     f'eta {msg.estimated_time_remaining.sec}s, '
-                     f'recoveries {msg.number_of_recoveries}]')
-        elif msg.message:
-            extra = f'  ({msg.message})'
-        self._log(name, f'{msg.mission_id}{extra}', color)
+            line = self._render_feedback(msg)
+            if line:
+                self._log(name, line, color)
+            return
+        self._log(name, self._render_event(msg), color)
+
+    def _render_event(self, msg):
+        text = (msg.message or '').strip() or _EVENT_FALLBACK.get(
+            msg.event_type, '')
+        if not text:
+            return 'telemetry update'
+        if msg.mission_id and msg.mission_id not in text:
+            return f'{msg.mission_id} — {text}'
+        return text
+
+    def _render_feedback(self, msg):
+        """Turn the 5 Hz Nav2 telemetry flood into compact milestone lines."""
+        ctx = self._fb_ctx
+        now = time.monotonic()
+        wp_changed = msg.current_waypoint != ctx['wp']
+        rec_increased = msg.number_of_recoveries > ctx['rec']
+        bucket = int(msg.distance_remaining // 2.0)
+        bucket_down = bucket < ctx['bucket']
+        heartbeat = (now - ctx['hb']) >= 15.0
+        ctx['wp'] = msg.current_waypoint
+        ctx['rec'] = max(ctx['rec'], msg.number_of_recoveries)
+        ctx['bucket'] = min(ctx['bucket'], bucket)
+        parts = []
+        if wp_changed and msg.current_waypoint > 0:
+            parts.append(f'waypoint {msg.current_waypoint}/{msg.total_waypoints}')
+        if rec_increased and msg.number_of_recoveries > 0:
+            parts.append(f'recovery #{msg.number_of_recoveries} triggered (Nav2 replanning)')
+        if bucket_down or heartbeat:
+            eta = msg.estimated_time_remaining.sec
+            parts.append(f'{msg.distance_remaining:.1f} m remaining · ETA ~{eta}s')
+            ctx['hb'] = now
+        return ' · '.join(parts) if parts else None
 
     def _on_status(self, msg):
         state = STATE_NAMES.get(msg.state, f'STATE_{msg.state}')
+        self._status_state = state
         self.status_state.setText(state)
         color = {
             NavigationStatus.STATE_IDLE: '#ffffff',
@@ -584,20 +652,30 @@ class MissionControlGUI(QMainWindow):
         self.status_dist.setText(f'remaining: {msg.distance_remaining:.2f} m')
         self.status_eta.setText(f'ETA: {msg.estimated_time_remaining.sec}s')
         self.status_wp.setText(f'waypoint: {msg.current_waypoint}/{msg.total_waypoints}')
+        message = (msg.message or '').strip()
+        if (message and any(h in message.lower() for h in _DIAG_HINTS)
+                and not self._last_logged_line.endswith(message)):
+            self._log('info', message, QColor(255, 205, 210))
+
+    def _guard_state(self, allowed, warning):
+        if self._status_state not in allowed:
+            self._log('warn', f'{warning} (state={self._status_state})')
 
     _STYLE = {
         'system': ('#9e9e9e', 'SYS'),
         'command': ('#cddc39', 'CMD'),
         'pose': ('#64b5f6', 'POSE'),
+        'info': ('#eceff1', 'INFO'),
         'warn': ('#ffb74d', 'WARN'),
         'error': ('#e57373', 'ERROR'),
     }
 
     def _log(self, kind, text, color=None):
+        self._last_logged_line = text
         if color is None:
             color, tag = self._STYLE.get(kind, ('#ffffff', kind.upper()))
         else:
-            tag = kind
+            tag = kind.upper()
         html = (f'<span style="color:#616161;">{time.strftime("%H:%M:%S")}</span> '
                 f'<span style="color:{color};">[{tag}]</span> '
                 f'<span style="color:{color};">{text}</span>')
