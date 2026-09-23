@@ -16,6 +16,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -27,6 +28,7 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time', default='true')
     autostart = LaunchConfiguration('autostart', default='true')
     gui = LaunchConfiguration('gui', default='true')
+    launch_sim = LaunchConfiguration('launch_sim', default='true')
     params_file = LaunchConfiguration(
         'params_file',
         default=os.path.join(pkg_ms04, 'params', 'office_nav2_params.yaml')
@@ -40,6 +42,10 @@ def generate_launch_description():
     declare_autostart = DeclareLaunchArgument('autostart', default_value='true')
     declare_gui = DeclareLaunchArgument('gui', default_value='true',
                                         description='Set false to run Gazebo headless')
+    declare_launch_sim = DeclareLaunchArgument(
+        'launch_sim', default_value='true',
+        description='Set false to skip the Gazebo simulation include '
+                    '(simulation already running)')
     declare_params = DeclareLaunchArgument(
         'params_file',
         default_value=os.path.join(pkg_ms04, 'params', 'office_nav2_params.yaml')
@@ -55,6 +61,7 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(pkg_ms04, 'launch', 'office_simulation.launch.py')
         ),
+        condition=IfCondition(launch_sim),
         launch_arguments={
             'use_sim_time': use_sim_time,
             'x_pose': '0.0',
@@ -125,6 +132,7 @@ def generate_launch_description():
         declare_sim_time,
         declare_autostart,
         declare_gui,
+        declare_launch_sim,
         declare_params,
         declare_map,
         office_sim,

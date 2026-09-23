@@ -100,9 +100,13 @@ void NavigationCoordinatorNode::process_command(
 
 void NavigationCoordinatorNode::start_mission(const NavigationMission::SharedPtr msg) {
     if (state_ == MissionState::NAVIGATING || state_ == MissionState::PAUSED) {
-        publish_status(MissionState::ABORTED,
-                       "start rejected: mission already active (" + mission_.mission_id + ")");
-        RCLCPP_WARN(this->get_logger(), "start rejected: mission already active");
+        std::string reason =
+            "start rejected: mission already active (" + mission_.mission_id + ")";
+        publish_status(MissionState::ABORTED, reason);
+        publish_navigation_event(
+            NavigationEvent::EVENT_GOAL_REJECTED, reason, current_pose_, 0.0f,
+            builtin_interfaces::msg::Duration(), 0, 0, mission_.total_waypoints);
+        RCLCPP_WARN(this->get_logger(), "%s", reason.c_str());
         return;
     }
 
@@ -233,6 +237,7 @@ void NavigationCoordinatorNode::dispatch_follow_waypoints(
 
 void NavigationCoordinatorNode::handle_cancel() {
     if (state_ == MissionState::IDLE) {
+        publish_status(MissionState::IDLE, "cancel ignored: no active mission");
         RCLCPP_WARN(this->get_logger(), "cancel ignored: no active mission");
         return;
     }
@@ -254,6 +259,7 @@ void NavigationCoordinatorNode::handle_cancel() {
 
 void NavigationCoordinatorNode::handle_pause() {
     if (state_ != MissionState::NAVIGATING) {
+        publish_status(state_, "pause ignored: no active goal");
         RCLCPP_WARN(this->get_logger(), "pause ignored: no active goal");
         return;
     }
@@ -274,6 +280,7 @@ void NavigationCoordinatorNode::handle_pause() {
 
 void NavigationCoordinatorNode::handle_resume() {
     if (state_ != MissionState::PAUSED) {
+        publish_status(state_, "resume ignored: not paused");
         RCLCPP_WARN(this->get_logger(), "resume ignored: not paused");
         return;
     }
@@ -351,8 +358,12 @@ void NavigationCoordinatorNode::nav_result(const NavToPoseHandle::WrappedResult 
         publish_status(MissionState::COMPLETED, "mission completed");
         finish_mission(NavigationEvent::EVENT_GOAL_COMPLETED, true, "mission completed");
     } else if (result.code == rclcpp_action::ResultCode::ABORTED) {
-        publish_status(MissionState::ABORTED, "mission aborted");
-        finish_mission(NavigationEvent::EVENT_GOAL_ABORTED, false, "mission aborted");
+        std::string reason = "mission aborted";
+        if (result.result) {
+            reason += ": " + result.result->error_msg;
+        }
+        publish_status(MissionState::ABORTED, reason);
+        finish_mission(NavigationEvent::EVENT_GOAL_ABORTED, false, reason);
     } else {  // CANCELED
         publish_status(MissionState::CANCELED, "mission canceled");
         finish_mission(NavigationEvent::EVENT_GOAL_CANCELED, false, "mission canceled");

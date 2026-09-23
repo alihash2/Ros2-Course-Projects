@@ -116,6 +116,50 @@ ros2 launch ms04_autonomous_navigation warehouse_navigation.launch.py
   planned paths, waypoint markers (published by the coordinator on
   `/navigation/waypoints_marker`) and the 2D Pose Estimate / 2D Goal tools.
 
+## Mission Control GUI
+
+`scripts/mission_control_gui.py` is a PyQt5 front-end that drives the whole
+pipeline from one window. It publishes on `/navigation/mission` and renders
+the coordinator's `/navigation/events` and `/navigation/status` streams in a
+color-coded, real-time log viewer.
+
+```bash
+ros2 run ms04_autonomous_navigation mission_control_gui
+```
+
+| Panel | Controls |
+|-------|----------|
+| Environment & Navigation | Environment selector (Office / Warehouse), **Launch Simulation**, **Load Map + Activate Nav2**, **Set Initial Pose** (publishes the predefined spawn on `/initialpose`) |
+| Goal & Waypoint Dispatcher | Mode (Single Goal / Waypoints), X / Y / Theta pose inputs, predefined POIs per environment, Add-as-Waypoint list builder |
+| Execution Control | Start Mission, Pause, Resume, Cancel Goal, Replace Goal (color-coded buttons) |
+| Mission Status | Live state, mission id, current pose, distance remaining, ETA, waypoint index |
+| Real-Time Navigation Log | Color-coded `NavigationEvent` + GUI command feed |
+
+- The log renders events as human-readable milestone lines. Nav2 telemetry
+  (`EVENT_FEEDBACK`) is throttled into compact progress lines ("waypoint 2/4",
+  "recovery #1 triggered", "3.2 m remaining · ETA ~9s") instead of flooding the
+  view at the 5 Hz tick rate; waypoint arrivals, recovery counts and distance
+  buckets are reported as they change.
+- Diagnostic status messages are surfaced automatically, e.g. *"start rejected:
+  mission already active"*, *"cancel ignored: no active mission"*, or *"mission
+  aborted: Failed to create plan..."* (the coordinator now passes Nav2's
+  `error_msg` through on aborts and emits `EVENT_GOAL_REJECTED` on refused
+  starts), so a problem is visible in the log instead of only in the terminal.
+- The GUI also pre-checks its known coordinator state and warns in the log when
+  a control button won't apply (e.g. Pause while idle).
+
+- Simulation is launched separately from Nav2: **Activate Nav2** reuses the
+  environment navigation launch with `launch_sim:=false` (both navigation
+  launches accept the new `launch_sim` argument), so the stack can attach to an
+  already-running sim.
+- POIs are configurable per environment (`ENVS` dict at the top of the script):
+  office POIs target rooms/corridor, warehouse POIs target aisles and racks.
+- The ROS 2 node spins in a background `QThread`; subscriptions emit
+  thread-safe Qt signals that update the widgets on the main thread.
+- Verified end-to-end against the real coordinator + mock Nav2 servers: a
+  mission published from the GUI is accepted, completes, and its events are
+  rendered in the log viewer.
+
 ## Autonomous SLAM Exploration (primary mapping workflow)
 
 Drives a TurtleBot3 Waffle through the world on a frontier-based exploration
