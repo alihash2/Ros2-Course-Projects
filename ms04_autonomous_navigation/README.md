@@ -91,6 +91,25 @@ Inside the GUI, the button flow is the **only** flow you need:
 No `ros2 topic` commands are ever required during testing — the buttons
 publish them for you.
 
+### Workflow guardrails
+
+Each stage unlocks only when the previous one is verified running (the GUI
+watches the actual `ros2` processes every 2 s):
+
+- **Greyed-out controls** are still clickable and, instead of silently doing
+  nothing, show a **red error bar** naming the exact button you need to press.
+- The required button briefly **pulses red** until the stage is completed.
+- Pressing **Set Initial Pose** before it is allowed (sim/Nav2 not up) is
+  blocked; pressing it again after it is set shows an "Already localised"
+  dialog instead of re-publishing.
+- **Waypoint mode** refuses *consecutive duplicate* waypoints (same point
+  within 0.5 m and same heading).
+- Switching the **Environment** clears all waypoints and resets the initial pose
+  so the previous world's plan can never leak into the new one.
+- In **Single Goal** mode the coordinate boxes are read-only unless **Custom
+  (type coords below)** is selected in the POI dropdown, and the Mission Status
+  waypoint line reads `waypoint: 1/1` (a single goal has no waypoint list).
+
 ---
 
 ## 5. Step-by-Step Guided Session — Office
