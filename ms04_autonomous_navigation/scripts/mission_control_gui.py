@@ -637,6 +637,7 @@ class MissionControlGUI(QMainWindow):
         self._fb_ctx = {'mission': None, 'wp': -1, 'rec': -1}
         self._tracked_mission = None
         self._tracked_waypoints = False
+        self._tracked_plan = None
         self._plan_pose = None
         self._wp_offset = 0
 
@@ -647,6 +648,7 @@ class MissionControlGUI(QMainWindow):
         self._nav_launch_requested = False
         self._nav_fault_logged = False
         self._custom_selected = False
+        self._syncing_coords = False
         self._pulse_timers = {}
         self._error_timer = None
 
@@ -839,6 +841,10 @@ class MissionControlGUI(QMainWindow):
         self.spin_yaw.setRange(-math.pi, math.pi)
         self.spin_yaw.setDecimals(2)
         self.spin_yaw.setSingleStep(0.1)
+        self.spin_x.valueChanged.connect(self._sync_poi_from_coords)
+        self.spin_y.valueChanged.connect(self._sync_poi_from_coords)
+        for spin in (self.spin_x, self.spin_y, self.spin_yaw):
+            spin.valueChanged.connect(self._refresh_workflow)
         pose_form = QHBoxLayout()
         pose_form.addWidget(QLabel('X'))
         pose_form.addWidget(self.spin_x, 1)
@@ -1059,6 +1065,7 @@ class MissionControlGUI(QMainWindow):
         self.wp_list.clear()
         self._tracked_mission = None
         self._tracked_waypoints = False
+        self._tracked_plan = None
         self._plan_pose = None
         self._wp_offset = 0
         self._pose_set = False
@@ -1100,13 +1107,58 @@ class MissionControlGUI(QMainWindow):
         if index >= len(pois):  # the trailing 'Custom' entry
             self._custom_selected = True
             self._update_pose_inputs()
+            self._refresh_workflow()
             return
         self._custom_selected = False
         name = pois[index]
         x, y, yaw = cfg['pois'][name]
-        self.spin_x.setValue(x)
-        self.spin_y.setValue(y)
-        self.spin_yaw.setValue(yaw)
+        self._syncing_coords = True
+        try:
+            self.spin_x.setValue(x)
+            self.spin_y.setValue(y)
+            self.spin_yaw.setValue(yaw)
+        finally:
+            self._syncing_coords = False
+        self._update_pose_inputs()
+        self._refresh_workflow()
+
+    def _sync_poi_from_coords(self):
+        """Unified POI <-> coordinate input: the X/Y coordinates you typed are
+        the single source of truth. Matching a predefined POI (within the
+        tolerance) automatically selects that POI and snaps the pose to its
+        exact values; any other coordinate selects 'Custom'. The two controls
+        can never disagree about which goal would actually be dispatched."""
+        if self._syncing_coords:
+            return
+        cfg = ENVS[self._env_key]
+        x = self.spin_x.value()
+        y = self.spin_y.value()
+        poi_keys = list(cfg['pois'].keys())
+        match = None
+        for name, (px, py, pyaw) in cfg['pois'].items():
+            if math.hypot(x - px, y - py) <= POI_MATCH_TOLERANCE:
+                match = (name, px, py, pyaw)
+                break
+        if match is None:
+            if not self._custom_selected:
+                self.poi_combo.blockSignals(True)
+                self.poi_combo.setCurrentIndex(self.poi_combo.count() - 1)
+                self.poi_combo.blockSignals(False)
+                self._custom_selected = True
+            self._update_pose_inputs()
+            return
+        name, px, py, pyaw = match
+        self._syncing_coords = True
+        try:
+            self.poi_combo.blockSignals(True)
+            self.poi_combo.setCurrentIndex(poi_keys.index(name))
+            self.poi_combo.blockSignals(False)
+            self._custom_selected = False
+            self.spin_x.setValue(px)
+            self.spin_y.setValue(py)
+            self.spin_yaw.setValue(pyaw)
+        finally:
+            self._syncing_coords = False
         self._update_pose_inputs()
 
     def _on_mode_changed(self, _index):
@@ -1262,19 +1314,22 @@ class MissionControlGUI(QMainWindow):
         self._update_pose_inputs()
 
         wp_area = dispatch_ready and wp_mode
-        self.btn_add_wp.setEnabled(wp_area)
-        self.btn_remove_wp.setEnabled(wp_area)
-        self.btn_clear_wp.setEnabled(wp_area)
+        run_active = self._status_state == 'NAVIGATING' and self._tracked_waypoints
+        adder_ok = wp_area and not run_active
+        for b in (self.btn_add_wp, self.btn_remove_wp, self.btn_clear_wp):
+            b.setEnabled(wp_area)
+            self._set_dim(b, not adder_ok)
         self.wp_list.setEnabled(wp_area)
 
         st = self._status_state
-        start_ok = dispatch_ready and (not wp_mode or self.wp_list.count() > 0)
+        idle = st in ('IDLE', 'COMPLETED', 'CANCELED', 'ABORTED', 'REJECTED')
+        start_ok = dispatch_ready and idle and (not wp_mode or self.wp_list.count() > 0)
         ctrl = {
             self.btn_start: start_ok,
             self.btn_pause: dispatch_ready and st == 'NAVIGATING',
             self.btn_resume: dispatch_ready and st == 'PAUSED',
             self.btn_cancel: dispatch_ready and st in ('NAVIGATING', 'PAUSED'),
-            self.btn_replace: dispatch_ready,
+            self.btn_replace: self._replace_usable(),
         }
         for btn, on in ctrl.items():
             self._set_dim(btn, not on)
@@ -1340,6 +1395,62 @@ class MissionControlGUI(QMainWindow):
         self._log('warn', f'{message} (state={self._status_state})')
         self._show_error(f'{message} (current state: {self._status_state}).',
                          [button])
+        return False
+
+    def _capture_plan(self, mode, pose, waypoints):
+        """Snapshot the plan actually dispatched so Replace can compare the
+        current goal/waypoints against what the robot is running."""
+        if waypoints is not None:
+            coords = []
+            for i in range(self.wp_list.count()):
+                wx, wy, wyaw, _n, _s = self.wp_list.item(i).data(Qt.UserRole)
+                coords.append((wx, wy, wyaw))
+            return (NavigationMission.MODE_WAYPOINTS, tuple(coords))
+        return (NavigationMission.MODE_GO_TO_POSE,
+                (self.spin_x.value(), self.spin_y.value(), self.spin_yaw.value()))
+
+    def _active_plan_differs(self):
+        """True when the plan currently on the form differs (in coordinates or
+        order) from the plan the paused/running mission was dispatched with."""
+        tracked = self._tracked_plan
+        if tracked is None:
+            return True
+        tmode, tcoords = tracked
+        if tmode == NavigationMission.MODE_WAYPOINTS:
+            if self.mode_combo.currentIndex() != 1:
+                return True
+            cur = []
+            for i in range(self.wp_list.count()):
+                wx, wy, wyaw, _n, _s = self.wp_list.item(i).data(Qt.UserRole)
+                cur.append((wx, wy, wyaw))
+            return tuple(cur) != tcoords
+        if self.mode_combo.currentIndex() != 0:
+            return True
+        x, y, yaw = self.spin_x.value(), self.spin_y.value(), self.spin_yaw.value()
+        tx, ty, tyaw = tcoords
+        return (math.hypot(x - tx, y - ty) > POI_MATCH_TOLERANCE
+                or abs(yaw - tyaw) > 1e-4)
+
+    def _replace_usable(self):
+        """Replace is only meaningful while a mission is PAUSED and the plan on
+        the form has been changed to differ from the one currently running."""
+        if not (self._pose_set and self._nav_up and self._exec_up):
+            return False
+        if self._status_state != 'PAUSED':
+            return False
+        if self._tracked_plan is None:
+            return False
+        return self._active_plan_differs()
+
+    def _waypoint_edit_blocked(self):
+        """Waypoint editing is greyed out while a waypoint mission is driving;
+        it reopens when the run is paused (so waypoints can be changed and
+        then Replace applied)."""
+        if self._status_state == 'NAVIGATING' and self._tracked_waypoints:
+            self._show_error('A waypoint mission is currently running. Pause it '
+                             'before editing waypoints.',
+                             [self.btn_pause])
+            return True
         return False
 
     def _stop_other_env_stack(self):
@@ -1496,25 +1607,20 @@ class MissionControlGUI(QMainWindow):
     def _on_start(self):
         if not (self._require_ready() and self._require_executor()):
             return
-        active = self._status_state in ('NAVIGATING', 'PAUSED')
-        self._guard_state(
-            {'IDLE', 'COMPLETED', 'CANCELED', 'ABORTED', 'REJECTED'},
-            'Start may be rejected: a mission is already active (use Replace to preempt)')
+        if self._status_state not in ('IDLE', 'COMPLETED', 'CANCELED',
+                                      'ABORTED', 'REJECTED'):
+            self._show_error(
+                f'A mission is currently {self._status_state}. Pause it, '
+                'change the goal/waypoints to differ, then press '
+                '"Replace Goal" to swap the active plan.',
+                [self.btn_replace])
+            return
         plan = self._current_plan()
         if plan is None:
             return
-        if active:
-            answer = QMessageBox.question(
-                self, 'Replace active mission?',
-                'A mission is already active. Sending a new Start would be '
-                'rejected by the coordinator.\n\nDispatch this plan as a '
-                'REPLACE instead?',
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
-            if answer == QMessageBox.Yes:
-                self._dispatch_replace()
-            return
         mode, pose, waypoints = plan
         mission_id = self._next_mission_id()
+        self._tracked_plan = self._capture_plan(mode, pose, waypoints)
         self._publish_mission(NavigationMission.COMMAND_START, mode, mission_id,
                               pose=pose, waypoints=waypoints)
         self._start_tracking(mission_id, waypoints, pose=pose)
@@ -1558,19 +1664,19 @@ class MissionControlGUI(QMainWindow):
     def _on_replace(self):
         if not (self._require_ready() and self._require_executor()):
             return
-        plan = self._current_plan()
-        if plan is None:
+        if self._status_state != 'PAUSED':
+            self._show_error(
+                'Replace needs the active mission to be PAUSED first. Pause '
+                'the run, then edit the waypoints/goal to differ from the '
+                'current mission.', [self.btn_pause])
             return
-        if self._status_state in ('NAVIGATING', 'PAUSED'):
-            answer = QMessageBox.question(
-                self, 'Replace active mission?',
-                'Replace cancels the currently running goal and immediately '
-                'dispatches the new plan from the robot\'s current position.',
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if answer != QMessageBox.Yes:
-                self._log('system', 'Replace cancelled by user')
-                return
-        self._dispatch_replace(plan)
+        if not self._active_plan_differs():
+            self._show_error(
+                'The goal/waypoints are unchanged from the running mission. '
+                'Change their coordinates or order to differ before pressing '
+                '"Replace Goal".', [self.btn_add_wp])
+            return
+        self._dispatch_replace()
 
     def _dispatch_replace(self, plan=None):
         if plan is None:
@@ -1579,12 +1685,13 @@ class MissionControlGUI(QMainWindow):
                 return
         mode, pose, waypoints = plan
         mission_id = self._next_mission_id()
+        self._tracked_plan = self._capture_plan(mode, pose, waypoints)
         self._publish_mission(NavigationMission.COMMAND_REPLACE, mode, mission_id,
                               pose=pose, waypoints=waypoints)
         self._start_tracking(mission_id, waypoints, pose=pose)
         desc = ('new goal' if waypoints is None else f'{len(waypoints)} waypoints')
-        self._log('command', f'REPLACE mission {mission_id} ({desc}): old goal '
-                             'cancelled, new plan dispatched')
+        self._log('command', f'REPLACE mission {mission_id} ({desc}): paused '
+                             'mission cancelled at current position, new plan dispatched')
 
     def _start_tracking(self, mission_id, waypoints, pose=None):
         self._tracked_mission = mission_id
@@ -1621,6 +1728,8 @@ class MissionControlGUI(QMainWindow):
         self._update_lamps(counts)
 
     def _on_add_waypoint(self):
+        if self._waypoint_edit_blocked():
+            return
         x = self.spin_x.value()
         y = self.spin_y.value()
         yaw = self.spin_yaw.value()
@@ -1645,6 +1754,7 @@ class MissionControlGUI(QMainWindow):
         self._style_wp_item(item, 'pending')
         self._refresh_lamps()
         self._refresh_status_wp()
+        self._refresh_workflow()
 
     def _match_poi(self, x, y):
         cfg = ENVS[self._env_key]
@@ -1700,17 +1810,23 @@ class MissionControlGUI(QMainWindow):
         self._refresh_lamps()
 
     def _on_remove_waypoint(self):
+        if self._waypoint_edit_blocked():
+            return
         row = self.wp_list.currentRow()
         if row >= 0:
             self.wp_list.takeItem(row)
             self._renumber_wp_list()
             self._refresh_lamps()
             self._refresh_status_wp()
+            self._refresh_workflow()
 
     def _on_clear_waypoints(self):
+        if self._waypoint_edit_blocked():
+            return
         self.wp_list.clear()
         self._refresh_lamps()
         self._refresh_status_wp()
+        self._refresh_workflow()
 
     # ------------------------------------------------------------ Qt slots
     def _on_event(self, msg):
@@ -1722,6 +1838,8 @@ class MissionControlGUI(QMainWindow):
                               NavigationEvent.EVENT_GOAL_REJECTED):
             self._wipe_wp_progress()
             self._tracked_mission = None
+            self._tracked_plan = None
+            self._refresh_workflow()
         if msg.mission_id != self._fb_ctx['mission']:
             self._fb_ctx = {'mission': msg.mission_id, 'wp': -1, 'rec': -1}
         if msg.event_type == NavigationEvent.EVENT_GOAL_PAUSED:
@@ -1812,6 +1930,7 @@ class MissionControlGUI(QMainWindow):
             self.status_eta.setText('ETA: 0s')
 
         self._refresh_lamps()
+        self._refresh_workflow()
 
         if (self._tracked_mission and msg.mission_id == self._tracked_mission
                 and state == 'NAVIGATING'):
@@ -1845,10 +1964,6 @@ class MissionControlGUI(QMainWindow):
         central = self.centralWidget()
         if central is not None:
             self.backdrop.setGeometry(central.rect())
-
-    def _guard_state(self, allowed, warning):
-        if self._status_state not in allowed:
-            self._log('warn', f'{warning} (state={self._status_state})')
 
     _STYLE = {
         'system': ('#9e9e9e', 'SYS'),

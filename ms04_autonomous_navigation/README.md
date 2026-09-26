@@ -123,6 +123,27 @@ watches the actual `ros2` processes every 2 s):
 - In **Single Goal** mode the coordinate boxes are read-only unless **Custom
   (type coords below)** is selected in the POI dropdown, and the Mission Status
   waypoint line reads `waypoint: 1/1` (a single goal has no waypoint list).
+- **POI and typed coordinates are one unified input**: typing X/Y/X again over
+  an existing POI auto-selects that POI and snaps the boxes to its exact values;
+  a pose that matches no POI (within 0.5 m) falls back to **Custom**. Picking a
+  preset POI snaps the coordinate boxes to it accordingly.
+- **Start Mission is blocked while a mission is active** — while
+  `NAVIGATING`/`PAUSED`/… the button is greyed out; pressing it shows a red bar
+  (and pulses **Replace Goal**) instead of publishing a command the coordinator
+  would reject as "mission already active".
+- **Replace Goal requires a paused mission with a changed plan**: it needs
+  `PAUSED` **and** a goal or waypoint list different from the running mission
+  (order matters). Pressing it while driving → "PAUSED first"; while paused with
+  an unchanged plan → red bar telling you to change the goal/waypoints. The
+  current mission is remembered automatically so an identical guess can't be
+  re-sent.
+- **The waypoint adder/greys while a waypoint mission drives**: Add / Remove /
+  Clear are greyed out during `NAVIGATING`; once the mission is **paused** they
+  unlock so you can build a new route before pressing **Replace Goal** (adding
+  waypoints while driving is blocked with a "Pause it" red bar).
+- **Replacing / switching env resets the remembered plan**: after a successful
+  Replace (or mission end, or env switch) the remembered running plan is cleared,
+  so the next Replace press is gated on a genuinely new plan.
 
 ---
 
@@ -177,7 +198,7 @@ Start any mission, then exercise the controls:
 | While the robot drives, halt it | **Pause** | `State: PAUSED`; robot stops; lamp turns **Paused** |
 | Continue again | **Resume** | `State: NAVIGATING`; robot re-dispatches from the pause point |
 | Stop the mission outright | **Cancel Goal** | `EVENT_GOAL_CANCELED`, `State: CANCELED`; lamps go dark; distance/ETA reset to `0.00 m / ~0s` |
-| Change target mid-route | pick a new goal, then **Replace Goal** | `EVENT_GOAL_REPLACED`; robot abandons the old route and heads to the new goal |
+| Change target mid-route | press **Pause** first, then pick a new goal / waypoints, then **Replace Goal** | `EVENT_GOAL_REPLACED`; robot abandons the old route and heads to the new goal. **Replace** only works while `PAUSED` and with a plan different from the running mission — otherwise a red bar explains what is missing |
 
 > **Single-goal missions never light waypoint lamps** — by design the lamps
 > report waypoint-group status only.
@@ -245,7 +266,7 @@ paused / completed / failed) as a visual cue.
 | Rack A (North) | (5.0, 6.0, 0.0) |
 | Rack B (South) | (5.0, -6.0, 0.0) |
 
-You can also type raw X / Y / Theta — any typed pose within `POI_MATCH_TOLERANCE` (0.5 m) of a predefined POI is auto-labelled with the POI name in the waypoint list.
+You can also type raw X / Y / Theta — any typed pose within `POI_MATCH_TOLERANCE` (0.5 m) of a predefined POI is auto-labelled with the POI name in the waypoint list, and the POI dropdown follows live as you type (matching → that POI selected with snapped values; otherwise → **Custom**).
 
 ---
 
