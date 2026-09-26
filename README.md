@@ -12,6 +12,7 @@ A collection of ROS 2 (Jazzy) packages built as course projects, covering everyt
 | `ms02_mobile_robot_control` | `ms02_mobile_robot_control` | Closed-loop go-to-pose control for **turtlesim** with an interactive CLI menu. Send the turtle to any `(x, y, theta)` within the 10×10 grid. |
 | `ms03_turtlebot3_control` | `ms03_turtlebot3_control` | Reactive **Behavior Tree** controller for a TurtleBot3 Waffle in Gazebo (`turtlebot3_world`) — LIDAR obstacle detection, turn-in-place recovery, and an interactive goal-sending menu. |
 | `dynamic_obstacle_avoidance` | `dynamic_obstacle_avoidance` | Custom **Nav2 global planner plugins** (A\* and RRT) for the TurtleBot3 in Gazebo, full Nav2 + RViz integration, costmap-validated goals, and a mission-control CLI menu. |
+| `ms04_autonomous_navigation` | `ms04_autonomous_navigation` | **Autonomous navigation** (Nav2) in custom Office/Warehouse Gazebo worlds with a PyQt5 **Mission Control GUI**. The GUI drives simulation, map + Nav2 bringup, initial pose, and goal/waypoint missions entirely from buttons. Includes AMCL localization per env and auto-SLAM mapping. |
 
 > Each package folder contains its own detailed `README.md` with prerequisites, build steps, run instructions, and usage examples. **Read the package's README before running it.**
 
@@ -43,12 +44,19 @@ This repo is meant to be cloned **inside** your ROS 2 workspace's `src/` folder.
 │       │   ├── scripts/            <- Python CLI menus
 │       │   ├── include/
 │       │   └── src/
-│       └── dynamic_obstacle_avoidance/
+│       ├── dynamic_obstacle_avoidance/
 │           ├── launch/             <- Gazebo + Nav2 + RViz launch
 │           ├── params/             <- Nav2 parameter files (A*/RRT)
 │           ├── plugins/            <- pluginlib plugin descriptor
 │           ├── src/                <- planner plugins + CLI menu
 │           └── include/
+│       └── ms04_autonomous_navigation/
+│           ├── launch/             <- per env sim/nav/mapping launches
+│           ├── params/             <- env Nav2 tuning + exploration params
+│           ├── worlds/ maps/       <- Office/Warehouse worlds + saved maps
+│           ├── msg/ action/        <- Navigation* interfaces
+│           ├── scripts/            <- PyQt5 Mission Control GUI
+│           └── src/                <- coordinator node (C++)
 ├── install/                        <- created by colcon build (not in repo)
 ├── build/                          <- created by colcon build (not in repo)
 └── log/                            <- created by colcon build (not in repo)
@@ -111,7 +119,9 @@ sudo apt install -y \
     ros-$ROS_DISTRO-nav2-bringup \
     ros-$ROS_DISTRO-nav2-simple-commander \
     ros-$ROS_DISTRO-behaviortree-cpp \
-    python3-numpy
+    ros-$ROS_DISTRO-slam-toolbox \
+    python3-numpy \
+    python3-pyqt5
 export TURTLEBOT3_MODEL=waffle     # needed by ms03 & dynamic packages; add to ~/.bashrc
 ```
 
@@ -152,17 +162,17 @@ Each package is independent — pick the one you want and follow its README:
 - **Turtlesim go-to-pose menu** → [`ms02_mobile_robot_control/README.md`](ms02_mobile_robot_control/README.md)
 - **Behavior tree TurtleBot3 control** → [`ms03_turtlebot3_control/README.md`](ms03_turtlebot3_control/README.md)
 - **Custom A\*/RRT Nav2 planners** → [`dynamic_obstacle_avoidance/README.md`](dynamic_obstacle_avoidance/README.md)
+- **Autonomous navigation GUI (Office/Warehouse)** → [`ms04_autonomous_navigation/README.md`](ms04_autonomous_navigation/README.md) — includes a step-by-step testing guide
 
-Quick example (ms02):
+Quick example (ms04 — the GUI drives everything via its buttons):
 
 ```bash
 source ~/ros2_ws/install/setup.bash
+export TURTLEBOT3_MODEL=waffle
 
-# Terminal 1
-ros2 run turtlesim turtlesim_node
-
-# Terminal 2 (also source first!)
-ros2 run ms02_mobile_robot_control goto_pose_app
+# the whole pipeline from one window: Launch Simulation -> Load Map + Activate
+# Nav2 -> Set Initial Pose -> Start Mission (all button-driven)
+ros2 run ms04_autonomous_navigation mission_control_gui
 ```
 
 ---
