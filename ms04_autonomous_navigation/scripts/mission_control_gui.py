@@ -14,20 +14,24 @@ The ROS 2 node spins in a background QThread; callbacks update the widget
 tree through thread-safe Qt signals.
 """
 import os
+import signal
 import subprocess
 import sys
 import time
 import math
+import random
 from collections import OrderedDict
 
 if sys.platform.startswith('linux') and 'QT_QPA_PLATFORM' not in os.environ:
     os.environ['QT_QPA_PLATFORM'] = 'xcb'
 
-from PyQt5.QtCore import QThread, pyqtSignal, Qt
-from PyQt5.QtGui import QColor, QFont
+from PyQt5.QtCore import QThread, QPointF, QRectF, pyqtSignal, Qt
+from PyQt5.QtGui import (
+    QBrush, QColor, QFont, QPainter, QPolygonF, QRadialGradient)
 from PyQt5.QtWidgets import (
-    QApplication, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox,
-    QHBoxLayout, QLabel, QListWidget, QMainWindow, QPlainTextEdit,
+    QApplication, QComboBox, QDoubleSpinBox, QFormLayout,
+    QGraphicsBlurEffect, QGraphicsDropShadowEffect, QGroupBox, QHBoxLayout,
+    QLabel, QListWidget, QMainWindow, QMessageBox, QPlainTextEdit,
     QPushButton, QVBoxLayout, QWidget)
 
 import rclpy
@@ -43,31 +47,364 @@ PKG = 'ms04_autonomous_navigation'
 ENVS = OrderedDict({
     'office': {
         'label': 'Office',
+        'world': 'office.world',
         'sim_launch': 'office_simulation.launch.py',
         'nav_launch': 'office_navigation.launch.py',
         'spawn': (0.0, 0.0, 0.0),
+        'initial_pose': (0.0, 0.0, 0.0),
         'pois': OrderedDict([
             ('Spawn', (0.0, 0.0, 0.0)),
             ('Corridor Center', (0.0, -4.0, 0.0)),
-            ('North Room', (4.0, 5.0, 0.0)),
-            ('South Room', (-3.0, -5.0, 0.0)),
-            ('Far East', (6.0, 0.0, 0.0)),
+            ('NW Conference', (-2.5, 5.5, math.pi)),
+            ('SW Reception', (-3.2, -2.2, math.pi)),
+            ('NE Cubicles', (3.0, 3.2, 0.0)),
+            ('SE Breakroom', (3.0, -1.8, 0.0)),
         ]),
     },
     'warehouse': {
         'label': 'Warehouse',
+        'world': 'warehouse.world',
         'sim_launch': 'warehouse_simulation.launch.py',
         'nav_launch': 'warehouse_navigation.launch.py',
         'spawn': (-6.0, 0.0, 0.0),
+        'initial_pose': (0.0, 0.0, 0.0),
         'pois': OrderedDict([
-            ('Spawn', (-6.0, 0.0, 0.0)),
-            ('Aisle Center', (0.0, 0.0, 0.0)),
-            ('Loading Zone', (6.0, 0.0, 0.0)),
-            ('Rack A', (-3.0, 4.0, 0.0)),
-            ('Rack B', (3.0, -4.0, 0.0)),
+            ('Spawn', (0.0, 0.0, 0.0)),
+            ('Aisle Center', (6.5, 0.0, 0.0)),
+            ('Loading Dock (West)', (-3.0, 1.5, math.pi)),
+            ('East Storage', (9.5, 0.0, 0.0)),
+            ('Rack A (North)', (5.0, 6.0, 0.0)),
+            ('Rack B (South)', (5.0, -6.0, 0.0)),
         ]),
     },
 })
+
+# How close (in metres) a typed/add pose must be to a predefined POI before the
+# waypoint list labels it with the POI name instead of raw coordinates.
+POI_MATCH_TOLERANCE = 0.5
+
+# Accent tints used by the status banner. Turquoise night - a fresh, vibrant
+# teal-to-cyan family over a deep sea backdrop.
+STATE_GLOW = {
+    'IDLE': ('#1f2e36', '#141d23'),
+    'NAVIGATING': ('#29c6ff', '#0e4a66'),
+    'PAUSED': ('#2fe3c4', '#0c5a52'),
+    'COMPLETED': ('#3ecf8e', '#0c4a34'),
+    'CANCELED': ('#5a8a94', '#2b4852'),
+    'ABORTED': ('#ff6b6b', '#7a1e1e'),
+    'REJECTED': ('#ff7a5c', '#7a2b1e'),
+}
+
+# Chroma per mission button - hue of the "lit lamp" glow in the dark.
+# Mirrors the chosen STATE_GLOW (top-bar) tint for each execution status.
+_BTN_GLOW = {
+    'btnStart': (41, 198, 255, 110),
+    'btnPause': (47, 227, 196, 110),
+    'btnResume': (62, 207, 142, 110),
+    'btnCancel': (110, 160, 170, 100),
+    'btnReplace': (255, 122, 92, 105),
+}
+
+
+def _hex_rgb(h):
+    """'#rrggbb' -> (r, g, b) tuple."""
+    h = h.lstrip('#')
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+DARK_QSS = '''
+QMainWindow, QDialog {
+    background: qlineargradient(x1:0.2, y1:0, x2:0.8, y2:1,
+        stop:0 #1a4a50, stop:0.3 #13383f,
+        stop:0.7 #0e2830, stop:1 #06161c);
+    color: #eaf6f5;
+}
+QWidget {
+    color: #eaf6f5;
+    font-size: 15px;
+    font-family: 'Lato', 'Cantarell', 'Noto Sans',
+        'DejaVu Sans', sans-serif;
+}
+QGroupBox {
+    border: 1px solid rgba(130,225,200,0.28);
+    border-top-color: rgba(200,255,235,0.45);
+    border-radius: 14px;
+    margin-top: 26px;
+    padding-top: 8px;
+    padding-bottom: 6px;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 rgba(45,150,140,0.34), stop:0.45 rgba(25,110,115,0.26),
+        stop:0.8 rgba(12,70,80,0.20), stop:1 rgba(7,26,32,0.72));
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 14px;
+    padding: 2px 10px 2px 10px;
+    color: #a2f2dd;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    background: transparent;
+}
+QLabel { background: transparent; }
+QLabel#envHint { color: #7faeae; font-size: 13px; }
+QLabel#monoVal {
+    color: #bdeee8;
+    font-family: 'DejaVu Sans Mono', monospace;
+    font-size: 14px;
+    background: transparent;
+}
+QLabel#monoVal[stateIdle="true"] { color: #4d7678; }
+
+QComboBox, QDoubleSpinBox, QSpinBox {
+    background: rgba(13,32,40,0.82);
+    border: 1px solid rgba(120,200,210,0.22);
+    border-radius: 9px;
+    padding: 6px 10px;
+    selection-background-color: #3fe0cf;
+    selection-color: #05201d;
+}
+QComboBox:hover, QDoubleSpinBox:hover, QSpinBox:hover {
+    border-color: rgba(110,240,220,0.55);
+    background: rgba(16,38,48,0.88);
+}
+QComboBox:focus, QDoubleSpinBox:focus, QSpinBox:focus {
+    border: 1px solid #47e8e0;
+}
+QComboBox::drop-down {
+    border: none; width: 24px;
+}
+QComboBox::down-arrow {
+    image: none;
+    width: 0; height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid #6ff2e0;
+    margin-right: 6px;
+}
+QComboBox QAbstractItemView {
+    background: #0f2a32;
+    border: 1px solid rgba(120,200,210,0.26);
+    border-radius: 10px;
+    padding: 4px;
+    selection-background-color: rgba(70,230,210,0.24);
+    selection-color: #eaf6f5;
+    outline: none;
+}
+QComboBox QAbstractItemView::item {
+    border-radius: 6px;
+    padding: 4px 8px;
+}
+QDoubleSpinBox::up-button, QDoubleSpinBox::down-button,
+QSpinBox::up-button, QSpinBox::down-button {
+    background: transparent; border: none; width: 18px;
+}
+QDoubleSpinBox::up-arrow, QSpinBox::up-arrow {
+    image: none; width: 0; height: 0;
+    border-left: 4px solid transparent; border-right: 4px solid transparent;
+    border-bottom: 5px solid #7fc9c0;
+}
+QDoubleSpinBox::down-arrow, QSpinBox::down-arrow {
+    image: none; width: 0; height: 0;
+    border-left: 4px solid transparent; border-right: 4px solid transparent;
+    border-top: 5px solid #7fc9c0;
+}
+
+QPushButton {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #24464e, stop:0.08 #1b3a42,
+        stop:0.5 #152e36, stop:1 #0d1f25);
+    border: 1px solid rgba(140,220,225,0.25);
+    border-top-color: rgba(200,255,255,0.38);
+    border-radius: 12px;
+    padding: 7px 14px;
+    color: #e9faf8;
+    font-size: 14px;
+    font-weight: 600;
+}
+QPushButton:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #2a525c, stop:0.08 #20424c,
+        stop:0.5 #183640, stop:1 #0f252c);
+    border-color: rgba(110,240,220,0.55);
+    color: #ffffff;
+}
+QPushButton:pressed {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #0a1a1f, stop:1 #12262d);
+    padding-top: 11px; padding-bottom: 9px;
+}
+QPushButton:disabled { color: #4c7173; border-color: rgba(200,255,255,0.09); }
+QPushButton:focus {
+    border: 1px solid #47e8e0;
+}
+
+QPushButton#btnStart {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #bdeeff, stop:0.12 #29c6ff,
+        stop:0.6 #1189c9, stop:1 #0e4a66);
+    border: 1px solid #7fd4ff;
+    border-top-color: #e8f8ff;
+    color: #041a26;
+}
+QPushButton#btnStart:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #d0f4ff, stop:0.12 #47d2ff,
+        stop:0.6 #16a0e0, stop:1 #115a7a);
+    border-color: #a8e3ff;
+}
+QPushButton#btnStart:pressed {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #0a2e40, stop:1 #0f5a7a);
+}
+QPushButton#btnPause {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #b9ffee, stop:0.12 #2fe3c4,
+        stop:0.6 #14a98f, stop:1 #0c5a52);
+    border: 1px solid #7fffdd;
+    border-top-color: #e8fffa;
+    color: #04251f;
+}
+QPushButton#btnPause:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #d4fff5, stop:0.12 #4bf0d2,
+        stop:0.6 #1ac4a6, stop:1 #0f6f66);
+    border-color: #a8ffea;
+}
+QPushButton#btnPause:pressed {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #0a352f, stop:1 #117067);
+}
+QPushButton#btnResume {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #baffe0, stop:0.12 #3ecf8e,
+        stop:0.6 #1d945c, stop:1 #0c4a34);
+    border: 1px solid #7fffc0;
+    border-top-color: #e8fff2;
+    color: #04261a;
+}
+QPushButton#btnResume:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #d4fff0, stop:0.12 #55e0a4,
+        stop:0.6 #23ab6c, stop:1 #0f5c40);
+    border-color: #a8ffd9;
+}
+QPushButton#btnResume:pressed {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #0a3526, stop:1 #115c40);
+}
+QPushButton#btnCancel {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #b8d3da, stop:0.12 #5a8a94,
+        stop:0.6 #3a5d68, stop:1 #2b4852);
+    border: 1px solid #9cc2cb;
+    border-top-color: #e6f2f5;
+    color: #0c1a1f;
+}
+QPushButton#btnCancel:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #d2e6ec, stop:0.12 #6a9aa6,
+        stop:0.6 #446b78, stop:1 #33535e);
+    border-color: #c0dce2;
+}
+QPushButton#btnCancel:pressed {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #1e333a, stop:1 #2e4d57);
+}
+QPushButton#btnReplace {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #ffd2c2, stop:0.12 #ff7a5c,
+        stop:0.6 #c74a2f, stop:1 #7a2b1e);
+    border: 1px solid #ffb49e;
+    border-top-color: #fff0e8;
+    color: #2b0c05;
+}
+QPushButton#btnReplace:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #ffe2d6, stop:0.12 #ff8f73,
+        stop:0.6 #d9583a, stop:1 #8a3722);
+    border-color: #ffcab8;
+}
+QPushButton#btnReplace:pressed {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #4a1f12, stop:1 #71301c);
+}
+
+QPushButton#btnStart, QPushButton#btnPause, QPushButton#btnResume,
+QPushButton#btnCancel, QPushButton#btnReplace {
+    font-size: 13px;
+    padding: 6px 14px;
+}
+
+QListWidget {
+    background: rgba(1,16,24,0.80);
+    border: 1px solid rgba(120,200,210,0.22);
+    border-radius: 10px;
+    padding: 4px;
+    outline: none;
+}
+QListWidget::item {
+    border-radius: 6px;
+    padding: 4px 10px;
+    margin: 1px 2px;
+}
+QListWidget::item:hover { background: rgba(110,240,220,0.10); }
+QListWidget::item:selected {
+    background: rgba(70,230,210,0.20);
+    border: 1px solid rgba(100,235,210,0.55);
+    padding: 3px 9px;
+}
+
+QPlainTextEdit {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(0,14,22,0.88), stop:1 rgba(0,6,12,0.94));
+    border: 1px solid rgba(120,200,210,0.22);
+    border-radius: 10px;
+    padding: 8px;
+    selection-background-color: rgba(70,230,210,0.35);
+    selection-color: #eaf6f5;
+}
+QPlainTextEdit:focus { border: 1px solid #47e8e0; }
+
+QScrollBar:vertical {
+    background: transparent; width: 9px; margin: 2px;
+}
+QScrollBar::handle:vertical {
+    background: #2e5257; border-radius: 4px; min-height: 24px;
+}
+QScrollBar::handle:vertical:hover { background: #3fe0cf; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+QScrollBar:horizontal {
+    background: transparent; height: 9px; margin: 2px;
+}
+QScrollBar::handle:horizontal {
+    background: #2e5257; border-radius: 4px; min-width: 24px;
+}
+QScrollBar::handle:horizontal:hover { background: #3fe0cf; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }
+
+QMenu {
+    background: #0f2a32;
+    border: 1px solid rgba(120,200,210,0.26);
+    border-radius: 10px;
+    padding: 5px;
+}
+QMenu::item { padding: 6px 24px; border-radius: 6px; }
+QMenu::item:selected { background: rgba(70,230,210,0.22); color: #eaf6f5; }
+
+QToolTip {
+    background: #0f2a32;
+    color: #eaf6f5;
+    border: 1px solid #47e8e0;
+    border-radius: 7px;
+    padding: 6px 10px;
+}
+QMessageBox {
+    background: #0d242c;
+}
+QMessageBox QLabel { color: #eaf6f5; }
+'''
 
 EVENT_NAMES = {
     NavigationEvent.EVENT_GOAL_SUBMITTED: 'SUBMITTED',
@@ -93,17 +430,17 @@ STATE_NAMES = {
 }
 
 EVENT_COLORS = {
-    NavigationEvent.EVENT_GOAL_SUBMITTED: QColor(160, 160, 160),
-    NavigationEvent.EVENT_GOAL_ACCEPTED: QColor(76, 175, 80),
-    NavigationEvent.EVENT_GOAL_REJECTED: QColor(244, 67, 54),
-    NavigationEvent.EVENT_FEEDBACK: QColor(33, 150, 243),
-    NavigationEvent.EVENT_GOAL_COMPLETED: QColor(0, 200, 83),
-    NavigationEvent.EVENT_GOAL_CANCELED: QColor(255, 152, 0),
-    NavigationEvent.EVENT_GOAL_ABORTED: QColor(255, 23, 68),
-    NavigationEvent.EVENT_GOAL_PAUSED: QColor(255, 193, 7),
-    NavigationEvent.EVENT_GOAL_RESUMED: QColor(0, 188, 212),
-    NavigationEvent.EVENT_GOAL_REPLACED: QColor(156, 39, 176),
-}
+        NavigationEvent.EVENT_GOAL_SUBMITTED: QColor(160, 160, 160),
+        NavigationEvent.EVENT_GOAL_ACCEPTED: QColor(76, 175, 80),
+        NavigationEvent.EVENT_GOAL_REJECTED: QColor(244, 67, 54),
+        NavigationEvent.EVENT_FEEDBACK: QColor(33, 150, 243),
+        NavigationEvent.EVENT_GOAL_COMPLETED: QColor(0, 220, 90),
+        NavigationEvent.EVENT_GOAL_CANCELED: QColor(255, 152, 0),
+        NavigationEvent.EVENT_GOAL_ABORTED: QColor(255, 23, 68),
+        NavigationEvent.EVENT_GOAL_PAUSED: QColor(255, 193, 7),
+        NavigationEvent.EVENT_GOAL_RESUMED: QColor(0, 188, 212),
+        NavigationEvent.EVENT_GOAL_REPLACED: QColor(156, 39, 176),
+    }
 
 _EVENT_FALLBACK = {
     NavigationEvent.EVENT_GOAL_SUBMITTED: 'mission submitted for execution',
@@ -129,6 +466,75 @@ def _yaw_to_quat(yaw):
     q.z = math.sin(yaw / 2.0)
     q.w = math.cos(yaw / 2.0)
     return q
+
+
+# Command-line fragments used to detect our own sim/nav/rviz stacks so the GUI
+# never double-launches and can clean up cleanly on close.
+_SIM_MARKERS = {
+    'office': ['worlds/office.world'],
+    'warehouse': ['worlds/warehouse.world'],
+}
+_NAV_MARKERS = {
+    'office': ['params/office_nav2_params.yaml'],
+    'warehouse': ['params/warehouse_nav2_params.yaml'],
+}
+_RVIZ_MARKER = ['rviz2', 'nav2_gui_view.rviz']
+
+# Process families that belong to our stack but carry no per-env marker
+# (Gazebo GUI clients, bridge, relay, RSP, lifecycle managers, coordinator,
+# explorer, and the ros2 launch parents). Used by cleanup-on-close only.
+_STACK_MARKERS = (
+    ['gz sim -g'],
+    ['turtlebot3_waffle_bridge.yaml'],
+    ['cmd_vel_relay'],
+    ['robot_state_publisher'],
+    ['lifecycle_manager'],
+    ['navigation_coordinator_node'],
+    ['auto_slam_explorer'],
+    ['ros2 launch ms04_autonomous_navigation'],
+)
+
+
+def _pids_matching(needles):
+    """Return set of live PIDs whose command line contains ALL needle strings."""
+    try:
+        out = subprocess.run(['ps', '-eo', 'pid,args'],
+                             capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
+    found = set()
+    for line in out.stdout.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        pid, args = parts
+        if all(n in args for n in needles):
+            try:
+                found.add(int(pid))
+            except ValueError:
+                pass
+    return found - {os.getpid()}
+
+
+def _kill_pids(pids, grace=1.5):
+    """SIGTERM then SIGKILL: send SIGTERM to the whole set, wait briefly,
+    then escalate anything still alive. Favours simple process trees over
+    expensive negative-pgid walking."""
+    for pid in list(pids):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (OSError, ProcessLookupError):
+            pass
+    deadline = time.monotonic() + grace
+    remaining = list(pids)
+    while remaining and time.monotonic() < deadline:
+        time.sleep(0.1)
+        remaining = [p for p in remaining if os.path.exists(f'/proc/{p}')]
+    for pid in remaining:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (OSError, ProcessLookupError):
+            pass
 
 
 class RosSpinnerThread(QThread):
@@ -157,6 +563,65 @@ class RosSpinnerThread(QThread):
         self.wait(3000)
 
 
+class BackdropWidget(QWidget):
+    """Fills the window behind every container with soft, randomly-shaped
+    blobs tinted to the current mission-state glow colour. The paint is done
+    with radial gradients, giving the shapes a blurred, glowing look."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._tint = QColor(41, 198, 255)
+        self._shapes = None
+        self._seed_points()
+
+    def _seed_points(self):
+        rng = random
+        shapes = []
+        for _ in range(5):
+            cx = rng.uniform(0.05, 0.95)
+            cy = rng.uniform(0.05, 0.95)
+            r = rng.uniform(0.08, 0.30)
+            kind = rng.choice('etq')
+            shapes.append((cx, cy, r, rng.uniform(0, math.tau), kind))
+        self._shapes = shapes
+
+    def set_tint(self, hex_color):
+        self._tint = QColor(hex_color)
+        self.update()
+
+    def paintEvent(self, _event):
+        if not self._shapes:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        for cx, cy, r, rot, kind in self._shapes:
+            size = r * min(w, h)
+            cx, cy = cx * w, cy * h
+            grad = QRadialGradient(cx, cy, size)
+            grad.setColorAt(0.0, QColor(self._tint.red(), self._tint.green(),
+                                        self._tint.blue(), 110))
+            grad.setColorAt(0.55, QColor(self._tint.red(), self._tint.green(),
+                                         self._tint.blue(), 42))
+            grad.setColorAt(1.0, QColor(self._tint.red(), self._tint.green(),
+                                        self._tint.blue(), 0))
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(grad))
+            p.save()
+            p.translate(cx, cy)
+            p.rotate(rot)
+            if kind == 't':
+                tri = QPolygonF([QPointF(-size, size * 0.9),
+                                 QPointF(size, size * 0.9),
+                                 QPointF(0, -size)])
+                p.drawPolygon(tri)
+            elif kind == 'q':
+                p.drawRect(QRectF(-size, -size * 0.7, size * 2, size * 1.4))
+            else:
+                p.drawEllipse(QRectF(-size, -size, size * 2, size * 2))
+            p.restore()
+        p.end()
+
+
 class MissionControlGUI(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -169,11 +634,15 @@ class MissionControlGUI(QMainWindow):
 
         self._status_state = 'IDLE'
         self._last_logged_line = ''
-        self._fb_ctx = {'mission': None, 'wp': -1,
-                        'bucket': 1 << 30, 'rec': -1, 'hb': 0.0}
+        self._fb_ctx = {'mission': None, 'wp': -1, 'rec': -1}
+        self._tracked_mission = None
+        self._tracked_waypoints = False
+        self._plan_pose = None
+        self._wp_offset = 0
 
         self._build_ros()
         self._build_ui()
+        self._apply_banner('IDLE')
 
         self._ros_thread = RosSpinnerThread(self._node)
         self._ros_thread.event_received.connect(self._on_event, Qt.QueuedConnection)
@@ -181,6 +650,7 @@ class MissionControlGUI(QMainWindow):
         self._ros_thread.start()
 
         self._populate_env('office')
+        self._log_stack_status()
         self._log('system',
                   'GUI ready. Select Environment, then: 1) Launch Simulation, '
                   '2) Load Map + Activate Nav2, 3) Set Initial Pose, '
@@ -211,6 +681,21 @@ class MissionControlGUI(QMainWindow):
         self._node.destroy_node()
         rclpy.shutdown()
 
+    def _log_stack_status(self):
+        for key in ENVS:
+            label = ENVS[key]['label']
+            sim = _pids_matching(_SIM_MARKERS[key])
+            nav = _pids_matching(_NAV_MARKERS[key])
+            bits = []
+            if sim:
+                bits.append(f'sim up (pids {sorted(sim)})')
+            if nav:
+                bits.append(f'nav up (pids {sorted(nav)})')
+            if bits:
+                self._log('info', f'{label}: ' + '; '.join(bits))
+            else:
+                self._log('info', f'{label}: not running')
+
     def _publish_mission(self, command, mode, mission_id, pose=None, waypoints=None):
         msg = NavigationMission()
         msg.header.stamp = self._node.get_clock().now().to_msg()
@@ -228,7 +713,28 @@ class MissionControlGUI(QMainWindow):
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
-        root = QHBoxLayout(central)
+        outer = QVBoxLayout(central)
+        outer.setSpacing(12)
+
+        self.backdrop = BackdropWidget(central)
+        self.backdrop.lower()
+        self.backdrop.setGeometry(central.rect())
+        blur_eff = QGraphicsBlurEffect(self.backdrop)
+        blur_eff.setBlurRadius(26)
+        self.backdrop.setGraphicsEffect(blur_eff)
+
+        self.state_banner = QLabel('MISSION STATE: IDLE')
+        self.state_banner.setAlignment(Qt.AlignCenter)
+        self.state_banner.setMinimumHeight(62)
+        glow = QGraphicsDropShadowEffect(self.state_banner)
+        glow.setBlurRadius(22)
+        glow.setOffset(0, 0)
+        glow.setColor(QColor(60, 224, 200, 90))
+        self.state_banner.setGraphicsEffect(glow)
+        self._banner_glow = glow
+        outer.addWidget(self.state_banner)
+
+        root = QHBoxLayout()
 
         left = QVBoxLayout()
         left.addWidget(self._build_env_group())
@@ -242,10 +748,12 @@ class MissionControlGUI(QMainWindow):
 
         root.addLayout(left, 3)
         root.addLayout(right, 5)
+        outer.addLayout(root, 1)
 
     def _build_env_group(self):
         group = QGroupBox('1. Environment & Navigation')
         layout = QVBoxLayout()
+        layout.setSpacing(8)
 
         env_row = QHBoxLayout()
         env_row.addWidget(QLabel('Environment:'))
@@ -265,8 +773,10 @@ class MissionControlGUI(QMainWindow):
         btn_row.addWidget(self.btn_activate_nav)
         layout.addLayout(btn_row)
 
-        layout.addWidget(QLabel(
-            'Loader launches the AMCL navigation stack using the saved map.'))
+        hint = QLabel(
+            'Loader launches the AMCL navigation stack using the saved map.')
+        hint.setObjectName('envHint')
+        layout.addWidget(hint)
 
         pose_row = QHBoxLayout()
         self.btn_set_initial_pose = QPushButton('Set Initial Pose (Spawn)')
@@ -282,8 +792,10 @@ class MissionControlGUI(QMainWindow):
     def _build_mission_group(self):
         group = QGroupBox('2. Goal & Waypoint Dispatcher')
         layout = QVBoxLayout()
+        layout.setSpacing(8)
 
         form = QFormLayout()
+        form.setSpacing(6)
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(['Single Goal', 'Waypoints'])
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
@@ -331,89 +843,182 @@ class MissionControlGUI(QMainWindow):
         layout.addLayout(wp_row)
 
         self.wp_list = QListWidget()
-        self.wp_list.setMaximumHeight(130)
+        self.wp_list.setMaximumHeight(360)
         layout.addWidget(self.wp_list)
+
+        legend = QHBoxLayout()
+        legend.setSpacing(8)
+        self._lamps = {}
+        for key, label, on_c, on_g, off_c in (
+                ('loaded', 'Loaded', (215, 228, 255), (170, 200, 255),
+                 (34, 44, 58)),
+                ('progress', 'Progress', (200, 255, 250), (120, 255, 240),
+                 (24, 64, 60)),
+                ('paused', 'Paused', (255, 240, 170), (255, 215, 100),
+                 (64, 52, 16)),
+                ('reached', 'Reached', (210, 255, 230), (110, 255, 190),
+                 (22, 46, 34))):
+            wrap = QWidget()
+            pair = QHBoxLayout(wrap)
+            pair.setContentsMargins(0, 0, 0, 0)
+            pair.setSpacing(5)
+            pair.setAlignment(Qt.AlignCenter)
+            dot = QLabel('\u25cf')
+            dot.setStyleSheet(
+                f'color:rgb({off_c[0]},{off_c[1]},{off_c[2]});'
+                'font-size:24px;padding:0px;')
+            glow = QGraphicsDropShadowEffect(dot)
+            glow.setBlurRadius(10)
+            glow.setOffset(0, 0)
+            glow.setColor(QColor(0, 0, 0, 0))
+            dot.setGraphicsEffect(glow)
+            name = QLabel(label)
+            name.setStyleSheet('color:#bdeee8;')
+            pair.addWidget(dot)
+            pair.addWidget(name)
+            legend.addWidget(wrap, 1)
+            self._lamps[key] = (dot, glow, on_c, on_g, off_c)
+        layout.addLayout(legend)
 
         group.setLayout(layout)
         return group
 
+    def _update_lamps(self, counts):
+        """Light the loaded/progress/paused/reached legend lamps like switches:
+        a bright glowing bulb when the waypoint-tracking state is present, a
+        dull dark bulb when not. Single-goal missions never light any lamp."""
+        for key, (dot, glow, on_c, on_g, off_c) in self._lamps.items():
+            if counts.get(key, 0) > 0:
+                dot.setStyleSheet(
+                    f'color:rgb({on_c[0]},{on_c[1]},{on_c[2]});'
+                    'font-size:24px;padding:0px;')
+                glow.setColor(QColor(*on_g, 215))
+                glow.setBlurRadius(22)
+            else:
+                dot.setStyleSheet(
+                    f'color:rgb({off_c[0]},{off_c[1]},{off_c[2]});'
+                    'font-size:24px;padding:0px;')
+                glow.setColor(QColor(0, 0, 0, 0))
+                glow.setBlurRadius(4)
+
     def _build_control_group(self):
         group = QGroupBox('3. Execution Control')
         layout = QHBoxLayout()
+        layout.setSpacing(8)
+        layout.setContentsMargins(10, 6, 10, 8)
+        layout.setAlignment(Qt.AlignCenter)
 
         self.btn_start = QPushButton('Start Mission')
-        self.btn_start.setStyleSheet('background:#2e7d32;color:white;font-weight:bold;padding:8px;')
+        self.btn_start.setObjectName('btnStart')
         self.btn_start.clicked.connect(self._on_start)
 
         self.btn_pause = QPushButton('Pause')
-        self.btn_pause.setStyleSheet('background:#f9a825;padding:8px;')
+        self.btn_pause.setObjectName('btnPause')
         self.btn_pause.clicked.connect(self._on_pause)
 
         self.btn_resume = QPushButton('Resume')
-        self.btn_resume.setStyleSheet('background:#0277bd;color:white;padding:8px;')
+        self.btn_resume.setObjectName('btnResume')
         self.btn_resume.clicked.connect(self._on_resume)
 
         self.btn_cancel = QPushButton('Cancel Goal')
-        self.btn_cancel.setStyleSheet('background:#c62828;color:white;padding:8px;')
+        self.btn_cancel.setObjectName('btnCancel')
         self.btn_cancel.clicked.connect(self._on_cancel)
 
         self.btn_replace = QPushButton('Replace Goal')
-        self.btn_replace.setStyleSheet('background:#6a1b9a;color:white;padding:8px;')
+        self.btn_replace.setObjectName('btnReplace')
         self.btn_replace.clicked.connect(self._on_replace)
 
         for btn in (self.btn_start, self.btn_pause, self.btn_resume,
                     self.btn_cancel, self.btn_replace):
             layout.addWidget(btn)
+            glow = _BTN_GLOW.get(btn.objectName())
+            if glow:
+                eff = QGraphicsDropShadowEffect(btn)
+                eff.setBlurRadius(14)
+                eff.setOffset(0, 2)
+                eff.setColor(QColor(*glow))
+                btn.setGraphicsEffect(eff)
+
+        self.btn_start.setToolTip(
+            'Send a fresh mission. Rejected by the coordinator if a mission is '
+            'already active - use Replace to preempt.')
+        self.btn_pause.setToolTip(
+            'Stop the robot; the mission keeps its remaining waypoints so they '
+            'can be resumed.')
+        self.btn_resume.setToolTip(
+            'Continue a paused mission from the remaining waypoints.')
+        self.btn_cancel.setToolTip(
+            'Cancel the active mission and return to IDLE.')
+        self.btn_replace.setToolTip(
+            'Cancel the current goal and immediately dispatch the plan currently '
+            'in the Dispatcher (works while paused too).')
 
         group.setLayout(layout)
         return group
 
     def _build_status_group(self):
         group = QGroupBox('Mission Status')
-        layout = QHBoxLayout()
+        layout = QVBoxLayout()
+        layout.setSpacing(6)
 
-        col1 = QVBoxLayout()
         self.status_state = QLabel('IDLE')
-        self.status_state.setStyleSheet('font-weight:bold;font-size:14px;')
+        self.status_state.setStyleSheet(
+            'font-weight:bold;font-size:20px;letter-spacing:2px;')
         self.status_mission = QLabel('-')
-        col1.addWidget(self.status_state)
-        col1.addWidget(self.status_mission)
+        self.status_mission.setObjectName('monoVal')
 
-        col2 = QVBoxLayout()
+        self.status_target = QLabel('target: -')
+        self.status_target.setObjectName('monoVal')
+
+        rows = QVBoxLayout()
+        rows.setSpacing(8)
         self.status_pose = QLabel('pose: -')
+        self.status_pose.setObjectName('monoVal')
         self.status_dist = QLabel('-')
-        col2.addWidget(self.status_pose)
-        col2.addWidget(self.status_dist)
+        self.status_dist.setObjectName('monoVal')
+        rows.addWidget(self.status_pose)
+        rows.addWidget(self.status_dist)
 
-        col3 = QVBoxLayout()
+        cols = QVBoxLayout()
+        cols.setSpacing(8)
         self.status_eta = QLabel('-')
+        self.status_eta.setObjectName('monoVal')
         self.status_wp = QLabel('-')
-        col3.addWidget(self.status_eta)
-        col3.addWidget(self.status_wp)
+        self.status_wp.setObjectName('monoVal')
+        cols.addWidget(self.status_eta)
+        cols.addWidget(self.status_wp)
 
-        layout.addLayout(col1, 1)
-        layout.addLayout(col2, 1)
-        layout.addLayout(col3, 1)
+        for lbl in (self.status_mission, self.status_target, self.status_pose,
+                    self.status_dist, self.status_eta, self.status_wp):
+            lbl.setFont(QFont('DejaVu Sans Mono', 13))
+
+        grid = QHBoxLayout()
+        grid.addLayout(rows, 1)
+        grid.addLayout(cols, 1)
+
+        layout.addWidget(self.status_state)
+        layout.addWidget(self.status_mission)
+        layout.addWidget(self.status_target)
+        layout.addLayout(grid)
         group.setLayout(layout)
         return group
 
     def _build_log_group(self):
         group = QGroupBox('Real-Time Navigation Log')
         layout = QVBoxLayout()
+        layout.setSpacing(6)
 
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(5000)
-        self.log_view.setFont(QFont('Monospace', 9))
-        self.log_view.setStyleSheet(
-            'QPlainTextEdit{background:#101418;color:#d0d4d8;}')
+        self.log_view.setFont(QFont('Monospace', 11))
         layout.addWidget(self.log_view)
 
         clear_row = QHBoxLayout()
         btn_clear = QPushButton('Clear Log')
         btn_clear.clicked.connect(self.log_view.clear)
         self.lbl_src = QLabel('sources: /navigation/events /navigation/status')
-        self.lbl_src.setStyleSheet('color:#888;')
+        self.lbl_src.setStyleSheet('color:#6fa5ab;font-size:12px;')
         clear_row.addWidget(btn_clear)
         clear_row.addWidget(self.lbl_src, 1)
         layout.addLayout(clear_row)
@@ -433,8 +1038,10 @@ class MissionControlGUI(QMainWindow):
         for name in cfg['pois']:
             self.poi_combo.addItem(name)
         self.poi_combo.blockSignals(False)
-        sx, sy, syaw = cfg['spawn']
-        self.spawn_label.setText(f'({sx:.1f}, {sy:.1f}, {syaw:.2f} rad)')
+        ix, iy, iyaw = cfg['initial_pose']
+        self.spawn_label.setText(
+            f'map initial pose ({ix:.1f}, {iy:.1f}, {iyaw:.2f} rad) '
+            f'· world spawn ({cfg["spawn"][0]:.1f}, {cfg["spawn"][1]:.1f})')
         self._apply_poi(0)
 
     def _on_poi_changed(self, index):
@@ -453,14 +1060,65 @@ class MissionControlGUI(QMainWindow):
         self.btn_add_wp.setEnabled(waypoint_mode)
         self.btn_remove_wp.setEnabled(waypoint_mode)
         self.btn_clear_wp.setEnabled(waypoint_mode)
+        self._refresh_lamps()
+
+    def _stop_other_env_stack(self):
+        """Cleanly shut down every stack that belongs to a different
+        environment than the one currently selected, so switching envs swaps
+        stacks instead of piling them on top of each other."""
+        others = [key for key in ENVS if key != self._env_key]
+        pids = set()
+        stopped = []
+        for key in others:
+            sim = _pids_matching(_SIM_MARKERS[key])
+            nav = _pids_matching(_NAV_MARKERS[key])
+            if sim or nav:
+                stopped.append(ENVS[key]['label'])
+            pids.update(sim)
+            pids.update(nav)
+        if not pids:
+            return
+        for needles in _STACK_MARKERS:
+            pids.update(_pids_matching(needles))
+        pids.update(_pids_matching(_RVIZ_MARKER))
+        if pids:
+            self._log('warn',
+                      f"Stopping {', '.join(stopped) or 'other env'} stack "
+                      f'(pids {sorted(pids)}) before switching environment')
+            _kill_pids(pids)
 
     def _on_launch_sim(self):
         cfg = ENVS[self._env_key]
+        running = _pids_matching(_SIM_MARKERS[self._env_key])
+        if running:
+            self._log('warn', f"{cfg['label']} simulation is already running "
+                              f'(pids {sorted(running)}) - not launching a duplicate')
+            return
+        self._stop_other_env_stack()
         self._run_launch(cfg['sim_launch'], args={'gui': 'true'})
         self._log('system', f"Launched simulation: {cfg['label']} ({cfg['sim_launch']})")
 
     def _on_activate_nav(self):
         cfg = ENVS[self._env_key]
+        running = _pids_matching(_NAV_MARKERS[self._env_key])
+        if running:
+            self._log('warn', f"{cfg['label']} Nav2/map stack is already running "
+                              f'(pids {sorted(running)}) - not launching a duplicate')
+            return
+        self._stop_other_env_stack()
+        sim_pids = _pids_matching(_SIM_MARKERS[self._env_key])
+        if not sim_pids:
+            self._log('warn', f"No {cfg['label']} simulation detected - start it "
+                              'with "Launch Simulation" first, otherwise the robot '
+                              'will be missing')
+            return
+        other_sim = [k for k in ENVS
+                     if k != self._env_key and _pids_matching(_SIM_MARKERS[k])]
+        if other_sim:
+            self._log('warn', f"{cfg['label']} nav selected but "
+                              f"{ENVS[other_sim[0]]['label']} sim is running - "
+                              'start the matching env or stop the other first')
+            return
         self._run_launch(cfg['nav_launch'], args={'launch_sim': 'false', 'gui': 'true'})
         self._log('system',
                   f"Activated Nav2 + map load: {cfg['label']} ({cfg['nav_launch']}) "
@@ -480,7 +1138,7 @@ class MissionControlGUI(QMainWindow):
 
     def _on_set_initial_pose(self):
         cfg = ENVS[self._env_key]
-        x, y, yaw = cfg['spawn']
+        x, y, yaw = cfg['initial_pose']
         msg = PoseWithCovarianceStamped()
         msg.header.stamp = self._node.get_clock().now().to_msg()
         msg.header.frame_id = 'map'
@@ -492,7 +1150,7 @@ class MissionControlGUI(QMainWindow):
         msg.pose.covariance[7] = 0.25
         msg.pose.covariance[35] = 0.06
         self._initialpose_pub.publish(msg)
-        self._log('pose', f'Set initial pose -> ({x:.2f}, {y:.2f}, {yaw:.2f})')
+        self._log('pose', f'Set initial pose (map) -> ({x:.2f}, {y:.2f}, {yaw:.2f})')
 
     def _next_mission_id(self):
         self._mission_seq += 1
@@ -519,21 +1177,33 @@ class MissionControlGUI(QMainWindow):
             return None
         poses = []
         for i in range(self.wp_list.count()):
-            wx, wy, wyaw = self.wp_list.item(i).data(Qt.UserRole)
+            wx, wy, wyaw, _name, _state = self.wp_list.item(i).data(Qt.UserRole)
             poses.append(self._build_pose(wx, wy, wyaw))
         return (NavigationMission.MODE_WAYPOINTS, None, poses)
 
     def _on_start(self):
+        active = self._status_state in ('NAVIGATING', 'PAUSED')
         self._guard_state(
             {'IDLE', 'COMPLETED', 'CANCELED', 'ABORTED', 'REJECTED'},
             'Start may be rejected: a mission is already active (use Replace to preempt)')
         plan = self._current_plan()
         if plan is None:
             return
+        if active:
+            answer = QMessageBox.question(
+                self, 'Replace active mission?',
+                'A mission is already active. Sending a new Start would be '
+                'rejected by the coordinator.\n\nDispatch this plan as a '
+                'REPLACE instead?',
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if answer == QMessageBox.Yes:
+                self._dispatch_replace()
+            return
         mode, pose, waypoints = plan
         mission_id = self._next_mission_id()
         self._publish_mission(NavigationMission.COMMAND_START, mode, mission_id,
                               pose=pose, waypoints=waypoints)
+        self._start_tracking(mission_id, waypoints, pose=pose)
         desc = ('POI/goal' if waypoints is None
                 else f'{len(waypoints)} waypoints')
         self._log('command', f'START mission {mission_id} ({desc})')
@@ -543,56 +1213,181 @@ class MissionControlGUI(QMainWindow):
                           'Pause needs an active (NAVIGATING) mission; coordinator may ignore')
         self._publish_mission(NavigationMission.COMMAND_PAUSE,
                               NavigationMission.MODE_GO_TO_POSE, self._next_mission_id())
-        self._log('command', 'PAUSE sent')
+        self._log('command', 'PAUSE sent - robot stops, mission kept for resume')
 
     def _on_resume(self):
         self._guard_state({'PAUSED'},
                           'Resume needs a PAUSED mission; coordinator may ignore')
         self._publish_mission(NavigationMission.COMMAND_RESUME,
                               NavigationMission.MODE_GO_TO_POSE, self._next_mission_id())
-        self._log('command', 'RESUME sent')
+        self._log('command', 'RESUME sent - remaining waypoints continue')
 
     def _on_cancel(self):
         self._guard_state({'NAVIGATING', 'PAUSED'},
                           'Cancel has no active mission to stop; coordinator may ignore')
         self._publish_mission(NavigationMission.COMMAND_CANCEL,
                               NavigationMission.MODE_GO_TO_POSE, self._next_mission_id())
-        self._log('command', 'CANCEL sent')
+        self._log('command', 'CANCEL sent - mission aborted')
 
     def _on_replace(self):
         plan = self._current_plan()
         if plan is None:
             return
+        if self._status_state in ('NAVIGATING', 'PAUSED'):
+            answer = QMessageBox.question(
+                self, 'Replace active mission?',
+                'Replace cancels the currently running goal and immediately '
+                'dispatches the new plan from the robot\'s current position.',
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if answer != QMessageBox.Yes:
+                self._log('system', 'Replace cancelled by user')
+                return
+        self._dispatch_replace(plan)
+
+    def _dispatch_replace(self, plan=None):
+        if plan is None:
+            plan = self._current_plan()
+            if plan is None:
+                return
         mode, pose, waypoints = plan
         mission_id = self._next_mission_id()
         self._publish_mission(NavigationMission.COMMAND_REPLACE, mode, mission_id,
                               pose=pose, waypoints=waypoints)
+        self._start_tracking(mission_id, waypoints, pose=pose)
         desc = ('new goal' if waypoints is None else f'{len(waypoints)} waypoints')
-        self._log('command', f'REPLACE mission {mission_id} ({desc})')
+        self._log('command', f'REPLACE mission {mission_id} ({desc}): old goal '
+                             'cancelled, new plan dispatched')
+
+    def _start_tracking(self, mission_id, waypoints, pose=None):
+        self._tracked_mission = mission_id
+        self._tracked_waypoints = waypoints is not None
+        self._wp_offset = 0
+        self._plan_pose = pose
+        self._wipe_wp_progress()
+        if pose is not None:
+            p = pose.pose
+            self.status_target.setText(
+                f'target: ({p.position.x:.2f}, {p.position.y:.2f})')
+        elif waypoints is not None and waypoints:
+            p = waypoints[0].pose
+            self.status_target.setText(
+                f'target: wp1 ({p.position.x:.2f}, {p.position.y:.2f})')
+        else:
+            self.status_target.setText('target: -')
+
+    def _refresh_lamps(self):
+        """Recompute the loaded/progress/paused/reached lamps from the current
+        tracked waypoint mission state. In single-goal dispatch no waypoint list
+        is tracked, so every lamp stays off (nothing meaningful to report)."""
+        counts = {'loaded': 0, 'progress': 0, 'paused': 0, 'reached': 0}
+        if self._tracked_waypoints:
+            st = self._status_state
+            if st == 'NAVIGATING':
+                counts['progress'] = 1
+            elif st == 'PAUSED':
+                counts['paused'] = 1
+            elif st == 'COMPLETED':
+                counts['reached'] = 1
+            elif st not in ('CANCELED', 'ABORTED', 'REJECTED'):
+                counts['loaded'] = 1
+        self._update_lamps(counts)
 
     def _on_add_waypoint(self):
         x = self.spin_x.value()
         y = self.spin_y.value()
         yaw = self.spin_yaw.value()
-        item = self.wp_list.addItem(f'({x:.2f}, {y:.2f}, {yaw:.2f})')
-        self.wp_list.item(self.wp_list.count() - 1).setData(Qt.UserRole, (x, y, yaw))
+        name = self._match_poi(x, y)
+        self.wp_list.addItem(self._wp_label(self.wp_list.count(), x, y, yaw, name))
+        item = self.wp_list.item(self.wp_list.count() - 1)
+        item.setData(Qt.UserRole, (x, y, yaw, name, 'pending'))
+        self._style_wp_item(item, 'pending')
+        self._refresh_lamps()
+
+    def _match_poi(self, x, y):
+        cfg = ENVS[self._env_key]
+        for name, (px, py, _pyaw) in cfg['pois'].items():
+            if math.hypot(x - px, y - py) <= POI_MATCH_TOLERANCE:
+                return name
+        return None
+
+    def _wp_label(self, index, x, y, yaw, name):
+        num = f'#{index + 1} '
+        coord = f'({x:.2f}, {y:.2f}, {yaw:.2f})'
+        return num + (f'{name} ' if name else '') + coord
+
+    def _style_wp_item(self, item, state):
+        if state == 'done':
+            item.setForeground(QColor(165, 214, 167))
+            item.setBackground(QColor(20, 40, 26))
+        elif state == 'active':
+            item.setForeground(QColor(255, 213, 79))
+            item.setBackground(QColor(64, 56, 18))
+        else:
+            item.setForeground(QColor(144, 164, 174))
+            item.setBackground(QColor(20, 22, 28))
+        item.setData(Qt.UserRole, (*item.data(Qt.UserRole)[:4], state))
+
+    def _renumber_wp_list(self):
+        for i in range(self.wp_list.count()):
+            item = self.wp_list.item(i)
+            x, y, yaw, name, _state = item.data(Qt.UserRole)
+            item.setText(self._wp_label(i, x, y, yaw, name))
+
+    def _wipe_wp_progress(self):
+        for i in range(self.wp_list.count()):
+            item = self.wp_list.item(i)
+            x, y, yaw, name, _state = item.data(Qt.UserRole)
+            item.setData(Qt.UserRole, (x, y, yaw, name, 'pending'))
+            self._style_wp_item(item, 'pending')
+        self._refresh_lamps()
+
+    def _update_wp_progress(self, current):
+        """Style waypoint list rows as done / active / pending based on the
+        waypoint index the coordinator is currently following (0-based), plus
+        the offset accumulated across pause/resume cycles."""
+        index = self._wp_offset + current
+        for i in range(self.wp_list.count()):
+            item = self.wp_list.item(i)
+            if i < index:
+                self._style_wp_item(item, 'done')
+            elif i == index:
+                self._style_wp_item(item, 'active')
+            else:
+                self._style_wp_item(item, 'pending')
+        self._refresh_lamps()
 
     def _on_remove_waypoint(self):
         row = self.wp_list.currentRow()
         if row >= 0:
             self.wp_list.takeItem(row)
+            self._renumber_wp_list()
+            self._refresh_lamps()
 
     def _on_clear_waypoints(self):
         self.wp_list.clear()
+        self._refresh_lamps()
 
     # ------------------------------------------------------------ Qt slots
     def _on_event(self, msg):
         name = EVENT_NAMES.get(msg.event_type, f'EVENT_{msg.event_type}')
         color = EVENT_COLORS.get(msg.event_type, QColor(255, 255, 255))
+        if msg.event_type in (NavigationEvent.EVENT_GOAL_COMPLETED,
+                              NavigationEvent.EVENT_GOAL_CANCELED,
+                              NavigationEvent.EVENT_GOAL_ABORTED,
+                              NavigationEvent.EVENT_GOAL_REJECTED):
+            self._wipe_wp_progress()
+            self._tracked_mission = None
         if msg.mission_id != self._fb_ctx['mission']:
-            self._fb_ctx = {'mission': msg.mission_id, 'wp': -1,
-                            'bucket': 1 << 30, 'rec': -1, 'hb': 0.0}
+            self._fb_ctx = {'mission': msg.mission_id, 'wp': -1, 'rec': -1}
+        if msg.event_type == NavigationEvent.EVENT_GOAL_PAUSED:
+            if (self._tracked_mission and msg.mission_id == self._tracked_mission
+                    and self._tracked_waypoints):
+                self._wp_offset += msg.current_waypoint
         if msg.event_type == NavigationEvent.EVENT_FEEDBACK:
+            if self._tracked_mission and msg.mission_id == self._tracked_mission:
+                self._status_from_feedback(msg)
+                if self._tracked_waypoints:
+                    self._update_wp_progress(msg.current_waypoint)
             line = self._render_feedback(msg)
             if line:
                 self._log(name, line, color)
@@ -609,27 +1404,46 @@ class MissionControlGUI(QMainWindow):
         return text
 
     def _render_feedback(self, msg):
-        """Turn the 5 Hz Nav2 telemetry flood into compact milestone lines."""
+        """Turn the 5 Hz Nav2 telemetry flood into compact milestone lines.
+        Live pose / distance / ETA are shown in the Mission Status panel by
+        _status_from_feedback instead of filling the log with odometry noise."""
         ctx = self._fb_ctx
-        now = time.monotonic()
         wp_changed = msg.current_waypoint != ctx['wp']
         rec_increased = msg.number_of_recoveries > ctx['rec']
-        bucket = int(msg.distance_remaining // 2.0)
-        bucket_down = bucket < ctx['bucket']
-        heartbeat = (now - ctx['hb']) >= 15.0
         ctx['wp'] = msg.current_waypoint
         ctx['rec'] = max(ctx['rec'], msg.number_of_recoveries)
-        ctx['bucket'] = min(ctx['bucket'], bucket)
         parts = []
         if wp_changed and msg.current_waypoint > 0:
             parts.append(f'waypoint {msg.current_waypoint}/{msg.total_waypoints}')
         if rec_increased and msg.number_of_recoveries > 0:
             parts.append(f'recovery #{msg.number_of_recoveries} triggered (Nav2 replanning)')
-        if bucket_down or heartbeat:
-            eta = msg.estimated_time_remaining.sec
-            parts.append(f'{msg.distance_remaining:.1f} m remaining · ETA ~{eta}s')
-            ctx['hb'] = now
         return ' · '.join(parts) if parts else None
+
+    def _status_from_feedback(self, msg):
+        """Mirror the live 5 Hz feedback telemetry into the Mission Status
+        panel (pose, remaining distance, ETA, current waypoint, target)."""
+        p = msg.current_pose.pose
+        self.status_pose.setText(f'x {p.position.x:.2f} y {p.position.y:.2f} '
+                                 f'yaw {p.orientation.w:.2f}')
+        self.status_dist.setText(f'remaining: {msg.distance_remaining:.2f} m')
+        self.status_eta.setText(f'ETA: {msg.estimated_time_remaining.sec}s')
+        self.status_wp.setText(f'waypoint: {msg.current_waypoint}/{msg.total_waypoints}')
+        if not self._tracked_waypoints:
+            if self._plan_pose is not None:
+                gp = self._plan_pose.pose
+                self.status_target.setText(
+                    f'target: ({gp.position.x:.2f}, {gp.position.y:.2f})')
+            else:
+                self.status_target.setText(
+                    f'target: ({p.position.x:.2f}, {p.position.y:.2f})')
+        else:
+            idx = self._wp_offset + msg.current_waypoint
+            if 0 <= idx < self.wp_list.count():
+                item = self.wp_list.item(idx)
+                x, y, yaw, name, _ = item.data(Qt.UserRole)
+                self.status_target.setText(
+                    f'target: wp{idx + 1} ({x:.2f}, {y:.2f})'
+                    + (f' {name}' if name else ''))
 
     def _on_status(self, msg):
         state = STATE_NAMES.get(msg.state, f'STATE_{msg.state}')
@@ -644,18 +1458,48 @@ class MissionControlGUI(QMainWindow):
             NavigationStatus.STATE_ABORTED: '#e57373',
             NavigationStatus.STATE_REJECTED: '#f06292',
         }.get(msg.state, '#ffffff')
-        self.status_state.setStyleSheet(f'font-weight:bold;font-size:14px;color:{color};')
+        self.status_state.setStyleSheet(f'font-weight:bold;font-size:18px;color:{color};')
+        self._apply_banner(state)
         self.status_mission.setText(f'mission: {msg.mission_id}')
-        p = msg.current_pose.pose
-        self.status_pose.setText(f'x {p.position.x:.2f} y {p.position.y:.2f} '
-                                 f'yaw {msg.current_pose.pose.orientation.w:.2f}')
-        self.status_dist.setText(f'remaining: {msg.distance_remaining:.2f} m')
-        self.status_eta.setText(f'ETA: {msg.estimated_time_remaining.sec}s')
         self.status_wp.setText(f'waypoint: {msg.current_waypoint}/{msg.total_waypoints}')
+        if state in ('COMPLETED', 'CANCELED', 'ABORTED', 'REJECTED'):
+            self.status_dist.setText('remaining: 0.00 m')
+            self.status_eta.setText('ETA: 0s')
+
+        self._refresh_lamps()
+
+        if (self._tracked_mission and msg.mission_id == self._tracked_mission
+                and state == 'NAVIGATING'):
+            self._update_wp_progress(msg.current_waypoint)
+
         message = (msg.message or '').strip()
-        if (message and any(h in message.lower() for h in _DIAG_HINTS)
-                and not self._last_logged_line.endswith(message)):
+        if not message:
+            pass
+        elif (state == 'COMPLETED'
+              and any(k in message.lower() for k in ('complete', 'goal reached'))
+              and not self._last_logged_line.endswith(message)):
+            self._log('info', message, QColor(0, 220, 90))
+        elif (any(h in message.lower() for h in _DIAG_HINTS)
+              and not self._last_logged_line.endswith(message)):
             self._log('info', message, QColor(255, 205, 210))
+
+    def _apply_banner(self, state):
+        glow = STATE_GLOW.get(state, STATE_GLOW['IDLE'])
+        self._banner_glow.setColor(QColor(*(_hex_rgb(glow[0]) + (170,))))
+        self.backdrop.set_tint(glow[0])
+        self.state_banner.setStyleSheet(
+            'QLabel { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, '
+            f'stop:0 {glow[0]}, stop:1 {glow[1]}); '
+            'color: #f7f2ff; border: 1px solid rgba(255,255,255,0.22); '
+            'border-radius: 10px; padding: 10px 18px; '
+            'font-weight: 600; font-size: 20px; letter-spacing: 4px; }')
+        self.state_banner.setText(f'MISSION STATE: {state}')
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        central = self.centralWidget()
+        if central is not None:
+            self.backdrop.setGeometry(central.rect())
 
     def _guard_state(self, allowed, warning):
         if self._status_state not in allowed:
@@ -679,19 +1523,47 @@ class MissionControlGUI(QMainWindow):
         html = (f'<span style="color:#616161;">{time.strftime("%H:%M:%S")}</span> '
                 f'<span style="color:{color};">[{tag}]</span> '
                 f'<span style="color:{color};">{text}</span>')
+        vbar = self.log_view.verticalScrollBar()
+        at_bottom = vbar.value() >= vbar.maximum() - 8
         self.log_view.appendHtml(html)
+        if at_bottom:
+            vbar.setValue(vbar.maximum())
 
     # ------------------------------------------------------------- cleanup
+    def _stop_named_stack(self, needles, label):
+        pids = _pids_matching(needles)
+        if not pids:
+            return
+        self._log('warn', f'Stopping {label} (pids {sorted(pids)})')
+        _kill_pids(pids)
+
+    def _cleanup_all(self):
+        """Kill every ms04 stack process we know about: sims, bridges, relays,
+        nav nodes, lifecycle managers, coordinators, rviz and launch parents."""
+        pids = set()
+        for key in ENVS:
+            pids.update(_pids_matching(_SIM_MARKERS[key]))
+            pids.update(_pids_matching(_NAV_MARKERS[key]))
+        pids.update(_pids_matching(_RVIZ_MARKER))
+        for needles in _STACK_MARKERS:
+            pids.update(_pids_matching(needles))
+        if pids:
+            self._log('warn', f'Stopping stack (pids {sorted(pids)})')
+            _kill_pids(pids)
+
     def closeEvent(self, event):
         for proc in self._spawned_procs:
             if proc.poll() is None:
                 proc.terminate()
+        self._cleanup_all()
         self.shutdown_ros()
         super().closeEvent(event)
 
 
 def main(argv=None):
     app = QApplication(argv or sys.argv)
+    app.setStyle('Fusion')
+    app.setStyleSheet(DARK_QSS)
     gui = MissionControlGUI()
     gui.show()
     return app.exec_()

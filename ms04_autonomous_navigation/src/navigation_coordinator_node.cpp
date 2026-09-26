@@ -144,8 +144,23 @@ void NavigationCoordinatorNode::replace_mission(const NavigationMission::SharedP
         if (active_follow_handle_) {
             follow_waypoints_client_->async_cancel_goal(active_follow_handle_);
         }
+    } else if (state_ == MissionState::PAUSED) {
+        // paused: nothing is physically running, so swap the goal directly
+        cancel_reason_ = CancelReason::NONE;
+        pending_mission_ = nullptr;
+        publish_status(MissionState::ABORTED,
+                       "replacing paused mission with " + msg->mission_id);
+        publish_navigation_event(
+            NavigationEvent::EVENT_GOAL_REPLACED,
+            "replacing paused mission with " + msg->mission_id, current_pose_,
+            0.0f, builtin_interfaces::msg::Duration(), 0, 0,
+            mission_.total_waypoints);
+        RCLCPP_INFO(this->get_logger(), "replace requested while paused");
+        active_nav_handle_.reset();
+        active_follow_handle_.reset();
+        start_mission(msg);
     } else {
-        // idle / paused -> dispatch immediately
+        // idle -> dispatch immediately
         RCLCPP_INFO(this->get_logger(), "replace requested (no active goal)");
         cancel_reason_ = CancelReason::NONE;
         pending_mission_ = nullptr;
@@ -258,6 +273,11 @@ void NavigationCoordinatorNode::handle_cancel() {
 }
 
 void NavigationCoordinatorNode::handle_pause() {
+    if (state_ == MissionState::PAUSED) {
+        publish_status(MissionState::PAUSED, "pause ignored: mission already paused");
+        RCLCPP_WARN(this->get_logger(), "pause ignored: mission already paused");
+        return;
+    }
     if (state_ != MissionState::NAVIGATING) {
         publish_status(state_, "pause ignored: no active goal");
         RCLCPP_WARN(this->get_logger(), "pause ignored: no active goal");
@@ -284,6 +304,7 @@ void NavigationCoordinatorNode::handle_resume() {
         RCLCPP_WARN(this->get_logger(), "resume ignored: not paused");
         return;
     }
+    state_ = MissionState::NAVIGATING;
     publish_status(MissionState::NAVIGATING, "resuming mission " + mission_.mission_id);
     publish_navigation_event(
         NavigationEvent::EVENT_GOAL_RESUMED, "resuming mission " + mission_.mission_id,
