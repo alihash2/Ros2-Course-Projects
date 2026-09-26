@@ -158,6 +158,7 @@ void NavigationCoordinatorNode::replace_mission(const NavigationMission::SharedP
         RCLCPP_INFO(this->get_logger(), "replace requested while paused");
         active_nav_handle_.reset();
         active_follow_handle_.reset();
+        state_ = MissionState::IDLE;  // start_mission rejects active missions
         start_mission(msg);
     } else {
         // idle -> dispatch immediately

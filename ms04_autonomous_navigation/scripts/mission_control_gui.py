@@ -25,7 +25,7 @@ from collections import OrderedDict
 if sys.platform.startswith('linux') and 'QT_QPA_PLATFORM' not in os.environ:
     os.environ['QT_QPA_PLATFORM'] = 'xcb'
 
-from PyQt5.QtCore import QThread, QPointF, QRectF, pyqtSignal, Qt
+from PyQt5.QtCore import QThread, QPointF, QRectF, QTimer, pyqtSignal, Qt
 from PyQt5.QtGui import (
     QBrush, QColor, QFont, QPainter, QPolygonF, QRadialGradient)
 from PyQt5.QtWidgets import (
@@ -637,8 +637,20 @@ class MissionControlGUI(QMainWindow):
         self._fb_ctx = {'mission': None, 'wp': -1, 'rec': -1}
         self._tracked_mission = None
         self._tracked_waypoints = False
+        self._tracked_plan = None
         self._plan_pose = None
         self._wp_offset = 0
+
+        self._pose_set = False
+        self._sim_up = False
+        self._nav_up = False
+        self._exec_up = False
+        self._nav_launch_requested = False
+        self._nav_fault_logged = False
+        self._custom_selected = False
+        self._syncing_coords = False
+        self._pulse_timers = {}
+        self._error_timer = None
 
         self._build_ros()
         self._build_ui()
@@ -651,10 +663,18 @@ class MissionControlGUI(QMainWindow):
 
         self._populate_env('office')
         self._log_stack_status()
+        self._verify_stack()
+        self._refresh_workflow()
+        self._refresh_status_wp()
+        self._verify_timer = QTimer(self)
+        self._verify_timer.setInterval(2000)
+        self._verify_timer.timeout.connect(self._verify_stack)
+        self._verify_timer.start()
         self._log('system',
-                  'GUI ready. Select Environment, then: 1) Launch Simulation, '
-                  '2) Load Map + Activate Nav2, 3) Set Initial Pose, '
-                  '4) dispatch a goal below.')
+                  'GUI ready. Workflow: 1) Launch Map, '
+                  '2) Load Map + Nav (wait for it to fully start), '
+                  '3) Set Initial Pose, '
+                  '4) dispatch a goal below. Follow the enabled buttons.')
 
     # ------------------------------------------------------------------ ROS
     def _build_ros(self):
@@ -723,6 +743,14 @@ class MissionControlGUI(QMainWindow):
         blur_eff.setBlurRadius(26)
         self.backdrop.setGraphicsEffect(blur_eff)
 
+        self.error_bar = QLabel('')
+        self.error_bar.setWordWrap(True)
+        self.error_bar.setStyleSheet(
+            'background:#c62828;color:#ffffff;font-weight:bold;'
+            'padding:8px 14px;border-radius:8px;')
+        self.error_bar.setVisible(False)
+        outer.addWidget(self.error_bar)
+
         self.state_banner = QLabel('MISSION STATE: IDLE')
         self.state_banner.setAlignment(Qt.AlignCenter)
         self.state_banner.setMinimumHeight(62)
@@ -765,9 +793,9 @@ class MissionControlGUI(QMainWindow):
         layout.addLayout(env_row)
 
         btn_row = QHBoxLayout()
-        self.btn_launch_sim = QPushButton('Launch Simulation')
+        self.btn_launch_sim = QPushButton('Launch Map')
         self.btn_launch_sim.clicked.connect(self._on_launch_sim)
-        self.btn_activate_nav = QPushButton('Load Map + Activate Nav2')
+        self.btn_activate_nav = QPushButton('Load Map + Nav')
         self.btn_activate_nav.clicked.connect(self._on_activate_nav)
         btn_row.addWidget(self.btn_launch_sim)
         btn_row.addWidget(self.btn_activate_nav)
@@ -813,6 +841,10 @@ class MissionControlGUI(QMainWindow):
         self.spin_yaw.setRange(-math.pi, math.pi)
         self.spin_yaw.setDecimals(2)
         self.spin_yaw.setSingleStep(0.1)
+        self.spin_x.valueChanged.connect(self._sync_poi_from_coords)
+        self.spin_y.valueChanged.connect(self._sync_poi_from_coords)
+        for spin in (self.spin_x, self.spin_y, self.spin_yaw):
+            spin.valueChanged.connect(self._refresh_workflow)
         pose_form = QHBoxLayout()
         pose_form.addWidget(QLabel('X'))
         pose_form.addWidget(self.spin_x, 1)
@@ -1028,8 +1060,28 @@ class MissionControlGUI(QMainWindow):
 
     # ------------------------------------------------------- event handlers
     def _on_env_changed(self, _index):
+        if self.env_combo.currentData() == self._env_key:
+            return
+        self.wp_list.clear()
+        self._tracked_mission = None
+        self._tracked_waypoints = False
+        self._tracked_plan = None
+        self._plan_pose = None
+        self._wp_offset = 0
+        self._pose_set = False
+        self._sim_up = False
+        self._nav_up = False
+        self._exec_up = False
+        self._nav_launch_requested = False
+        self._nav_fault_logged = False
         self._env_key = self.env_combo.currentData()
         self._populate_env(self._env_key)
+        self._refresh_status_wp()
+        self._refresh_workflow()
+        self._verify_stack()
+        self._log('warn',
+                  f'Environment switched to {ENVS[self._env_key]["label"]}: '
+                  'waypoints cleared, initial pose reset')
 
     def _populate_env(self, key):
         cfg = ENVS[key]
@@ -1037,11 +1089,13 @@ class MissionControlGUI(QMainWindow):
         self.poi_combo.clear()
         for name in cfg['pois']:
             self.poi_combo.addItem(name)
+        self.poi_combo.addItem('Custom (type coords below)')
         self.poi_combo.blockSignals(False)
         ix, iy, iyaw = cfg['initial_pose']
         self.spawn_label.setText(
             f'map initial pose ({ix:.1f}, {iy:.1f}, {iyaw:.2f} rad) '
             f'· world spawn ({cfg["spawn"][0]:.1f}, {cfg["spawn"][1]:.1f})')
+        self._custom_selected = False
         self._apply_poi(0)
 
     def _on_poi_changed(self, index):
@@ -1049,18 +1103,355 @@ class MissionControlGUI(QMainWindow):
 
     def _apply_poi(self, index):
         cfg = ENVS[self._env_key]
-        name = list(cfg['pois'].keys())[index]
+        pois = list(cfg['pois'].keys())
+        if index >= len(pois):  # the trailing 'Custom' entry
+            self._custom_selected = True
+            self._update_pose_inputs()
+            self._refresh_workflow()
+            return
+        self._custom_selected = False
+        name = pois[index]
         x, y, yaw = cfg['pois'][name]
-        self.spin_x.setValue(x)
-        self.spin_y.setValue(y)
-        self.spin_yaw.setValue(yaw)
+        self._syncing_coords = True
+        try:
+            self.spin_x.setValue(x)
+            self.spin_y.setValue(y)
+            self.spin_yaw.setValue(yaw)
+        finally:
+            self._syncing_coords = False
+        self._update_pose_inputs()
+        self._refresh_workflow()
 
-    def _on_mode_changed(self, index):
-        waypoint_mode = (index == 1)
-        self.btn_add_wp.setEnabled(waypoint_mode)
-        self.btn_remove_wp.setEnabled(waypoint_mode)
-        self.btn_clear_wp.setEnabled(waypoint_mode)
+    def _sync_poi_from_coords(self):
+        """Unified POI <-> coordinate input: the X/Y coordinates you typed are
+        the single source of truth. Matching a predefined POI (within the
+        tolerance) automatically selects that POI and snaps the pose to its
+        exact values; any other coordinate selects 'Custom'. The two controls
+        can never disagree about which goal would actually be dispatched."""
+        if self._syncing_coords:
+            return
+        cfg = ENVS[self._env_key]
+        x = self.spin_x.value()
+        y = self.spin_y.value()
+        poi_keys = list(cfg['pois'].keys())
+        match = None
+        for name, (px, py, pyaw) in cfg['pois'].items():
+            if math.hypot(x - px, y - py) <= POI_MATCH_TOLERANCE:
+                match = (name, px, py, pyaw)
+                break
+        if match is None:
+            if not self._custom_selected:
+                self.poi_combo.blockSignals(True)
+                self.poi_combo.setCurrentIndex(self.poi_combo.count() - 1)
+                self.poi_combo.blockSignals(False)
+                self._custom_selected = True
+            self._update_pose_inputs()
+            return
+        name, px, py, pyaw = match
+        self._syncing_coords = True
+        try:
+            self.poi_combo.blockSignals(True)
+            self.poi_combo.setCurrentIndex(poi_keys.index(name))
+            self.poi_combo.blockSignals(False)
+            self._custom_selected = False
+            self.spin_x.setValue(px)
+            self.spin_y.setValue(py)
+            self.spin_yaw.setValue(pyaw)
+        finally:
+            self._syncing_coords = False
+        self._update_pose_inputs()
+
+    def _on_mode_changed(self, _index):
         self._refresh_lamps()
+        self._refresh_status_wp()
+        self._refresh_workflow()
+
+    # --------------------------------------------------------- workflow rails
+    _DIM_BTN = (
+        'QPushButton { background:#252b32; color:#5d6670; border:1px solid '
+        '#333b44; border-radius:8px; padding:8px 14px; } '
+        'QComboBox, QDoubleSpinBox, QLabel { color:#5d6670; } ')
+
+    def _set_dim(self, widget, on):
+        """Visually grey a widget out but keep it clickable, so pressing it can
+        raise the guidance error bar (only mode-gated items are truly disabled)."""
+        if getattr(widget, '_dimmed', False) == on:
+            return
+        widget._dimmed = on
+        widget.setStyleSheet(self._DIM_BTN if on else '')
+
+    def _pulse_button(self, button, on):
+        """Start/stop a soft glow on a button to point the user at the next
+        required action: the colour alternates gently between white and red
+        (previous version flashed the border too aggressively)."""
+        if on:
+            if id(button) in self._pulse_timers:
+                return
+            eff = QGraphicsDropShadowEffect(button)
+            eff.setBlurRadius(22)
+            eff.setOffset(0, 0)
+            button.setGraphicsEffect(eff)
+            timer = QTimer(button)
+            timer.setInterval(800)
+            state = {'white': True}
+
+            def tick():
+                state['white'] = not state['white']
+                if state['white']:
+                    eff.setColor(QColor(255, 255, 255, 70))
+                    eff.setBlurRadius(30)
+                else:
+                    eff.setColor(QColor(255, 70, 70, 85))
+                    eff.setBlurRadius(24)
+
+            timer.timeout.connect(tick)
+            timer.start()
+            tick()
+            self._pulse_timers[id(button)] = (timer, eff, button)
+        else:
+            entry = self._pulse_timers.pop(id(button), None)
+            if entry is None:
+                return
+            timer, eff, _btn = entry
+            timer.stop()
+            timer.deleteLater()
+            if button.graphicsEffect() is eff:
+                button.setGraphicsEffect(None)
+            if _BTN_GLOW.get(button.objectName()):
+                self._reapply_base_glow(button)
+
+    def _reapply_base_glow(self, button):
+        glow = _BTN_GLOW.get(button.objectName())
+        if not glow:
+            return
+        eff = QGraphicsDropShadowEffect(button)
+        eff.setBlurRadius(14)
+        eff.setOffset(0, 2)
+        eff.setColor(QColor(*glow))
+        button.setGraphicsEffect(eff)
+
+    def _show_error(self, message, buttons=()):
+        self.error_bar.setText('\u26a0  ' + message)
+        self.error_bar.setVisible(True)
+        for b in (buttons or ()):
+            if b is not None:
+                self._pulse_button(b, True)
+        if self._error_timer is not None:
+            self._error_timer.stop()
+        self._error_timer = QTimer(self)
+        self._error_timer.setSingleShot(True)
+        self._error_timer.timeout.connect(self._clear_error)
+        self._error_timer.start(10000)
+
+    def _clear_error(self):
+        self.error_bar.setVisible(False)
+        for _timer, _eff, button in list(self._pulse_timers.values()):
+            self._pulse_button(button, False)
+
+    _NAV_REQUIRED = (['lifecycle_manager'], ['navigation_coordinator_node'])
+
+    def _nav_online(self):
+        """Full online check for the current env's Nav2/map stack: the env
+        params marker plus the shared lifecycle manager and coordinator must all
+        be running together before the step counts as complete."""
+        missing = []
+        for needles in [_NAV_MARKERS[self._env_key]] + list(self._NAV_REQUIRED):
+            if not _pids_matching(needles):
+                missing.append(needles[0])
+        return (not missing), missing
+
+    def _verify_stack(self):
+        """Background guardrail check: watch the current env's sim + Nav2/map
+        processes, unlock the workflow stages in order (Launch Map -> Load Map +
+        Nav fully online -> initial pose -> executor online) and surface
+        incomplete/faulty startup with the exact missing component."""
+        cfg = ENVS[self._env_key]
+        sim = bool(_pids_matching(_SIM_MARKERS[self._env_key]))
+        exec_up = bool(_pids_matching(['navigation_coordinator_node']))
+        nav_ok, missing = self._nav_online()
+
+        if sim and not self._sim_up:
+            self._log('info', f"{cfg['label']} simulation verified running")
+        if nav_ok and not self._nav_up:
+            self._log('info',
+                      f"{cfg['label']} Nav2/map stack fully online "
+                      '(params + lifecycle_manager + coordinator)')
+            self._nav_launch_requested = False
+            self._nav_fault_logged = False
+        elif (self._nav_launch_requested and not nav_ok and not self._nav_fault_logged
+              and not _pids_matching(['ros2 launch ms04_autonomous_navigation'])):
+            # the launch parent died before the stack came fully online
+            self._nav_fault_logged = True
+            self._show_error(
+                f'{cfg["label"]} Nav2/map startup failed before going fully '
+                f'online: missing {", ".join(missing)}. Stop the stack and '
+                'press "Load Map + Nav" again.')
+            self._log('error',
+                      f"{cfg['label']} Nav2/map startup incomplete: "
+                      f'{", ".join(missing)} not detected')
+
+        self._sim_up = sim
+        self._nav_up = nav_ok
+        self._exec_up = exec_up
+        self._refresh_workflow()
+
+    def _refresh_workflow(self):
+        """Recompute which widgets are dimmed vs active from the workflow stage
+        (boot -> Launch Map -> Load Map + Nav fully online -> initial pose ->
+        executor online) and from the selected mode (single vs waypoints)."""
+        sim_up = self._sim_up
+        nav_up = self._nav_up
+        exec_up = self._exec_up
+        wp_mode = self.mode_combo.currentIndex() == 1
+        dispatch_ready = self._pose_set and nav_up and exec_up
+
+        self._set_dim(self.btn_launch_sim, False)
+        self._set_dim(self.btn_activate_nav, not sim_up)
+        self._set_dim(self.btn_set_initial_pose, not nav_up)
+
+        self._set_dim(self.mode_combo, not dispatch_ready)
+        self._set_dim(self.poi_combo, not dispatch_ready)
+        self._update_pose_inputs()
+
+        wp_area = dispatch_ready and wp_mode
+        run_active = self._status_state == 'NAVIGATING' and self._tracked_waypoints
+        adder_ok = wp_area and not run_active
+        for b in (self.btn_add_wp, self.btn_remove_wp, self.btn_clear_wp):
+            b.setEnabled(wp_area)
+            self._set_dim(b, not adder_ok)
+        self.wp_list.setEnabled(wp_area)
+
+        st = self._status_state
+        idle = st in ('IDLE', 'COMPLETED', 'CANCELED', 'ABORTED', 'REJECTED')
+        start_ok = dispatch_ready and idle and (not wp_mode or self.wp_list.count() > 0)
+        ctrl = {
+            self.btn_start: start_ok,
+            self.btn_pause: dispatch_ready and st == 'NAVIGATING',
+            self.btn_resume: dispatch_ready and st == 'PAUSED',
+            self.btn_cancel: dispatch_ready and st in ('NAVIGATING', 'PAUSED'),
+            self.btn_replace: self._replace_usable(),
+        }
+        for btn, on in ctrl.items():
+            self._set_dim(btn, not on)
+
+    def _update_pose_inputs(self):
+        """Coordinate/spin area: usable only once the dispatch stage is ready,
+        and only in Single Goal + Custom, or in Waypoint mode (where the same
+        box is how waypoints are composed)."""
+        ready = self._pose_set and self._nav_up and self._exec_up
+        wp_mode = self.mode_combo.currentIndex() == 1
+        enable = ready and (self._custom_selected or wp_mode)
+        for spin in (self.spin_x, self.spin_y, self.spin_yaw):
+            spin.setEnabled(enable)
+            self._set_dim(spin, not enable)
+
+    def _refresh_status_wp(self, current=None):
+        """Waypoint line: reflect the tracker count (N) in Waypoint mode and
+        show a flat 1/1 for the single-goal mode."""
+        if self.mode_combo.currentIndex() == 1:
+            total = self.wp_list.count()
+            if self._tracked_waypoints and current is not None:
+                idx = min(max(self._wp_offset + current + 1, 0), total)
+            else:
+                idx = 0
+            self.status_wp.setText(f'waypoint: {idx}/{total}')
+        else:
+            self.status_wp.setText('waypoint: 1/1')
+
+    def _require_ready(self):
+        """Dispatch gate that follows the 4-stage workflow order. The initial
+        pose is only required if it has not been set yet."""
+        if not self._sim_up:
+            self._show_error('No world is loaded yet. Press "Launch Map" first.',
+                             [self.btn_launch_sim])
+            return False
+        if not self._nav_up:
+            self._show_error('The map is loaded but Nav2 is not fully online '
+                             'yet. Press "Load Map + Nav" and wait for the '
+                             'stack to finish starting.',
+                             [self.btn_activate_nav])
+            return False
+        if not self._pose_set:
+            self._show_error('The robot has no initial pose yet. Press '
+                             '"Set Initial Pose".',
+                             [self.btn_set_initial_pose])
+            return False
+        return True
+
+    def _require_executor(self):
+        if self._exec_up:
+            return True
+        self._show_error(
+            'The navigation executor (coordinator) is not online yet. Wait for '
+            '"Load Map + Nav" to finish starting, then try again.',
+            [self.btn_activate_nav])
+        return False
+
+    def _guard_executor(self, allowed, message, button):
+        """Block an in-flight executor command and explain via the red bar
+        instead of silently publishing a command the coordinator would ignore."""
+        if self._status_state in allowed:
+            return True
+        self._log('warn', f'{message} (state={self._status_state})')
+        self._show_error(f'{message} (current state: {self._status_state}).',
+                         [button])
+        return False
+
+    def _capture_plan(self, mode, pose, waypoints):
+        """Snapshot the plan actually dispatched so Replace can compare the
+        current goal/waypoints against what the robot is running."""
+        if waypoints is not None:
+            coords = []
+            for i in range(self.wp_list.count()):
+                wx, wy, wyaw, _n, _s = self.wp_list.item(i).data(Qt.UserRole)
+                coords.append((wx, wy, wyaw))
+            return (NavigationMission.MODE_WAYPOINTS, tuple(coords))
+        return (NavigationMission.MODE_GO_TO_POSE,
+                (self.spin_x.value(), self.spin_y.value(), self.spin_yaw.value()))
+
+    def _active_plan_differs(self):
+        """True when the plan currently on the form differs (in coordinates or
+        order) from the plan the paused/running mission was dispatched with."""
+        tracked = self._tracked_plan
+        if tracked is None:
+            return True
+        tmode, tcoords = tracked
+        if tmode == NavigationMission.MODE_WAYPOINTS:
+            if self.mode_combo.currentIndex() != 1:
+                return True
+            cur = []
+            for i in range(self.wp_list.count()):
+                wx, wy, wyaw, _n, _s = self.wp_list.item(i).data(Qt.UserRole)
+                cur.append((wx, wy, wyaw))
+            return tuple(cur) != tcoords
+        if self.mode_combo.currentIndex() != 0:
+            return True
+        x, y, yaw = self.spin_x.value(), self.spin_y.value(), self.spin_yaw.value()
+        tx, ty, tyaw = tcoords
+        return (math.hypot(x - tx, y - ty) > POI_MATCH_TOLERANCE
+                or abs(yaw - tyaw) > 1e-4)
+
+    def _replace_usable(self):
+        """Replace is only meaningful while a mission is PAUSED and the plan on
+        the form has been changed to differ from the one currently running."""
+        if not (self._pose_set and self._nav_up and self._exec_up):
+            return False
+        if self._status_state != 'PAUSED':
+            return False
+        if self._tracked_plan is None:
+            return False
+        return self._active_plan_differs()
+
+    def _waypoint_edit_blocked(self):
+        """Waypoint editing is greyed out while a waypoint mission is driving;
+        it reopens when the run is paused (so waypoints can be changed and
+        then Replace applied)."""
+        if self._status_state == 'NAVIGATING' and self._tracked_waypoints:
+            self._show_error('A waypoint mission is currently running. Pause it '
+                             'before editing waypoints.',
+                             [self.btn_pause])
+            return True
+        return False
 
     def _stop_other_env_stack(self):
         """Cleanly shut down every stack that belongs to a different
@@ -1108,9 +1499,11 @@ class MissionControlGUI(QMainWindow):
         self._stop_other_env_stack()
         sim_pids = _pids_matching(_SIM_MARKERS[self._env_key])
         if not sim_pids:
-            self._log('warn', f"No {cfg['label']} simulation detected - start it "
-                              'with "Launch Simulation" first, otherwise the robot '
-                              'will be missing')
+            self._log('warn', f"No {cfg['label']} simulation detected - start "
+                              'the world first, otherwise the robot will be missing')
+            self._show_error(
+                f'No {cfg["label"]} world running. Press "Launch Map" first.',
+                [self.btn_launch_sim])
             return
         other_sim = [k for k in ENVS
                      if k != self._env_key and _pids_matching(_SIM_MARKERS[k])]
@@ -1118,7 +1511,13 @@ class MissionControlGUI(QMainWindow):
             self._log('warn', f"{cfg['label']} nav selected but "
                               f"{ENVS[other_sim[0]]['label']} sim is running - "
                               'start the matching env or stop the other first')
+            self._show_error(
+                f'{ENVS[other_sim[0]]["label"]} simulation is running. '
+                f'Switch to that environment or stop it before activating '
+                f'{cfg["label"]} Nav2.')
             return
+        self._nav_launch_requested = True
+        self._nav_fault_logged = False
         self._run_launch(cfg['nav_launch'], args={'launch_sim': 'false', 'gui': 'true'})
         self._log('system',
                   f"Activated Nav2 + map load: {cfg['label']} ({cfg['nav_launch']}) "
@@ -1139,6 +1538,23 @@ class MissionControlGUI(QMainWindow):
     def _on_set_initial_pose(self):
         cfg = ENVS[self._env_key]
         x, y, yaw = cfg['initial_pose']
+        if not _pids_matching(_SIM_MARKERS[self._env_key]):
+            self._show_error(
+                f'{cfg["label"]} is not running yet. Press "Launch Map" '
+                'before localising the robot.', [self.btn_launch_sim])
+            return
+        if not _pids_matching(_NAV_MARKERS[self._env_key]):
+            self._show_error(
+                f'Nav2 is not active for {cfg["label"]}. Press "Load Map + '
+                'Nav" before setting the initial pose.', [self.btn_activate_nav])
+            return
+        if self._pose_set:
+            QMessageBox.information(
+                self, 'Already localised',
+                f'The robot is already localised at the map initial pose '
+                f'({x:.2f}, {y:.2f}, {yaw:.2f} rad).\n\n'
+                'Pose remains valid until the simulation is restarted.')
+            return
         msg = PoseWithCovarianceStamped()
         msg.header.stamp = self._node.get_clock().now().to_msg()
         msg.header.frame_id = 'map'
@@ -1150,7 +1566,10 @@ class MissionControlGUI(QMainWindow):
         msg.pose.covariance[7] = 0.25
         msg.pose.covariance[35] = 0.06
         self._initialpose_pub.publish(msg)
-        self._log('pose', f'Set initial pose (map) -> ({x:.2f}, {y:.2f}, {yaw:.2f})')
+        self._pose_set = True
+        self._refresh_workflow()
+        self._log('pose', f'Set initial pose (map) -> ({x:.2f}, {y:.2f}, {yaw:.2f}); '
+                          'robot localised, workflow unlocked')
 
     def _next_mission_id(self):
         self._mission_seq += 1
@@ -1166,6 +1585,8 @@ class MissionControlGUI(QMainWindow):
         return pose
 
     def _current_plan(self):
+        if not self._require_ready():
+            return None
         x = self.spin_x.value()
         y = self.spin_y.value()
         yaw = self.spin_yaw.value()
@@ -1174,6 +1595,8 @@ class MissionControlGUI(QMainWindow):
             return (NavigationMission.MODE_GO_TO_POSE, self._build_pose(x, y, yaw), None)
         if self.wp_list.count() == 0:
             self._log('warn', 'Waypoint mode selected but no waypoints in list')
+            self._show_error('Waypoint mode selected but no waypoints in the list. '
+                             'Add waypoints below first.', [self.btn_add_wp])
             return None
         poses = []
         for i in range(self.wp_list.count()):
@@ -1182,25 +1605,22 @@ class MissionControlGUI(QMainWindow):
         return (NavigationMission.MODE_WAYPOINTS, None, poses)
 
     def _on_start(self):
-        active = self._status_state in ('NAVIGATING', 'PAUSED')
-        self._guard_state(
-            {'IDLE', 'COMPLETED', 'CANCELED', 'ABORTED', 'REJECTED'},
-            'Start may be rejected: a mission is already active (use Replace to preempt)')
+        if not (self._require_ready() and self._require_executor()):
+            return
+        if self._status_state not in ('IDLE', 'COMPLETED', 'CANCELED',
+                                      'ABORTED', 'REJECTED'):
+            self._show_error(
+                f'A mission is currently {self._status_state}. Pause it, '
+                'change the goal/waypoints to differ, then press '
+                '"Replace Goal" to swap the active plan.',
+                [self.btn_replace])
+            return
         plan = self._current_plan()
         if plan is None:
             return
-        if active:
-            answer = QMessageBox.question(
-                self, 'Replace active mission?',
-                'A mission is already active. Sending a new Start would be '
-                'rejected by the coordinator.\n\nDispatch this plan as a '
-                'REPLACE instead?',
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
-            if answer == QMessageBox.Yes:
-                self._dispatch_replace()
-            return
         mode, pose, waypoints = plan
         mission_id = self._next_mission_id()
+        self._tracked_plan = self._capture_plan(mode, pose, waypoints)
         self._publish_mission(NavigationMission.COMMAND_START, mode, mission_id,
                               pose=pose, waypoints=waypoints)
         self._start_tracking(mission_id, waypoints, pose=pose)
@@ -1209,40 +1629,54 @@ class MissionControlGUI(QMainWindow):
         self._log('command', f'START mission {mission_id} ({desc})')
 
     def _on_pause(self):
-        self._guard_state({'NAVIGATING'},
-                          'Pause needs an active (NAVIGATING) mission; coordinator may ignore')
+        if not (self._require_ready() and self._require_executor()):
+            return
+        if not self._guard_executor(
+                {'NAVIGATING'},
+                'Pause needs an active (NAVIGATING) mission', self.btn_pause):
+            return
         self._publish_mission(NavigationMission.COMMAND_PAUSE,
                               NavigationMission.MODE_GO_TO_POSE, self._next_mission_id())
         self._log('command', 'PAUSE sent - robot stops, mission kept for resume')
 
     def _on_resume(self):
-        self._guard_state({'PAUSED'},
-                          'Resume needs a PAUSED mission; coordinator may ignore')
+        if not (self._require_ready() and self._require_executor()):
+            return
+        if not self._guard_executor(
+                {'PAUSED'},
+                'Resume needs a PAUSED mission', self.btn_resume):
+            return
         self._publish_mission(NavigationMission.COMMAND_RESUME,
                               NavigationMission.MODE_GO_TO_POSE, self._next_mission_id())
         self._log('command', 'RESUME sent - remaining waypoints continue')
 
     def _on_cancel(self):
-        self._guard_state({'NAVIGATING', 'PAUSED'},
-                          'Cancel has no active mission to stop; coordinator may ignore')
+        if not (self._require_ready() and self._require_executor()):
+            return
+        if not self._guard_executor(
+                {'NAVIGATING', 'PAUSED'},
+                'Cancel needs an active mission to stop', self.btn_cancel):
+            return
         self._publish_mission(NavigationMission.COMMAND_CANCEL,
                               NavigationMission.MODE_GO_TO_POSE, self._next_mission_id())
         self._log('command', 'CANCEL sent - mission aborted')
 
     def _on_replace(self):
-        plan = self._current_plan()
-        if plan is None:
+        if not (self._require_ready() and self._require_executor()):
             return
-        if self._status_state in ('NAVIGATING', 'PAUSED'):
-            answer = QMessageBox.question(
-                self, 'Replace active mission?',
-                'Replace cancels the currently running goal and immediately '
-                'dispatches the new plan from the robot\'s current position.',
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if answer != QMessageBox.Yes:
-                self._log('system', 'Replace cancelled by user')
-                return
-        self._dispatch_replace(plan)
+        if self._status_state != 'PAUSED':
+            self._show_error(
+                'Replace needs the active mission to be PAUSED first. Pause '
+                'the run, then edit the waypoints/goal to differ from the '
+                'current mission.', [self.btn_pause])
+            return
+        if not self._active_plan_differs():
+            self._show_error(
+                'The goal/waypoints are unchanged from the running mission. '
+                'Change their coordinates or order to differ before pressing '
+                '"Replace Goal".', [self.btn_add_wp])
+            return
+        self._dispatch_replace()
 
     def _dispatch_replace(self, plan=None):
         if plan is None:
@@ -1251,12 +1685,13 @@ class MissionControlGUI(QMainWindow):
                 return
         mode, pose, waypoints = plan
         mission_id = self._next_mission_id()
+        self._tracked_plan = self._capture_plan(mode, pose, waypoints)
         self._publish_mission(NavigationMission.COMMAND_REPLACE, mode, mission_id,
                               pose=pose, waypoints=waypoints)
         self._start_tracking(mission_id, waypoints, pose=pose)
         desc = ('new goal' if waypoints is None else f'{len(waypoints)} waypoints')
-        self._log('command', f'REPLACE mission {mission_id} ({desc}): old goal '
-                             'cancelled, new plan dispatched')
+        self._log('command', f'REPLACE mission {mission_id} ({desc}): paused '
+                             'mission cancelled at current position, new plan dispatched')
 
     def _start_tracking(self, mission_id, waypoints, pose=None):
         self._tracked_mission = mission_id
@@ -1293,15 +1728,33 @@ class MissionControlGUI(QMainWindow):
         self._update_lamps(counts)
 
     def _on_add_waypoint(self):
+        if self._waypoint_edit_blocked():
+            return
         x = self.spin_x.value()
         y = self.spin_y.value()
         yaw = self.spin_yaw.value()
+        if self.wp_list.count() > 0:
+            lx, ly, lyaw, _lname, _lstate = self.wp_list.item(
+                self.wp_list.count() - 1).data(Qt.UserRole)
+            if math.hypot(x - lx, y - ly) <= POI_MATCH_TOLERANCE and yaw == lyaw:
+                self._log('warn',
+                          f'Waypoint #{self.wp_list.count() + 1} rejected: it '
+                          f'duplicates #{self.wp_list.count()} '
+                          f'({lx:.2f}, {ly:.2f}, {lyaw:.2f}) - consecutive '
+                          'duplicate waypoints are not allowed')
+                self._show_error(
+                    f'Waypoint rejected: duplicates the previous waypoint '
+                    f'#{self.wp_list.count()} ({lx:.2f}, {ly:.2f}, {lyaw:.2f}). '
+                    'Consecutive duplicate waypoints are not allowed.')
+                return
         name = self._match_poi(x, y)
         self.wp_list.addItem(self._wp_label(self.wp_list.count(), x, y, yaw, name))
         item = self.wp_list.item(self.wp_list.count() - 1)
         item.setData(Qt.UserRole, (x, y, yaw, name, 'pending'))
         self._style_wp_item(item, 'pending')
         self._refresh_lamps()
+        self._refresh_status_wp()
+        self._refresh_workflow()
 
     def _match_poi(self, x, y):
         cfg = ENVS[self._env_key]
@@ -1357,15 +1810,23 @@ class MissionControlGUI(QMainWindow):
         self._refresh_lamps()
 
     def _on_remove_waypoint(self):
+        if self._waypoint_edit_blocked():
+            return
         row = self.wp_list.currentRow()
         if row >= 0:
             self.wp_list.takeItem(row)
             self._renumber_wp_list()
             self._refresh_lamps()
+            self._refresh_status_wp()
+            self._refresh_workflow()
 
     def _on_clear_waypoints(self):
+        if self._waypoint_edit_blocked():
+            return
         self.wp_list.clear()
         self._refresh_lamps()
+        self._refresh_status_wp()
+        self._refresh_workflow()
 
     # ------------------------------------------------------------ Qt slots
     def _on_event(self, msg):
@@ -1377,6 +1838,8 @@ class MissionControlGUI(QMainWindow):
                               NavigationEvent.EVENT_GOAL_REJECTED):
             self._wipe_wp_progress()
             self._tracked_mission = None
+            self._tracked_plan = None
+            self._refresh_workflow()
         if msg.mission_id != self._fb_ctx['mission']:
             self._fb_ctx = {'mission': msg.mission_id, 'wp': -1, 'rec': -1}
         if msg.event_type == NavigationEvent.EVENT_GOAL_PAUSED:
@@ -1427,7 +1890,7 @@ class MissionControlGUI(QMainWindow):
                                  f'yaw {p.orientation.w:.2f}')
         self.status_dist.setText(f'remaining: {msg.distance_remaining:.2f} m')
         self.status_eta.setText(f'ETA: {msg.estimated_time_remaining.sec}s')
-        self.status_wp.setText(f'waypoint: {msg.current_waypoint}/{msg.total_waypoints}')
+        self._refresh_status_wp(msg.current_waypoint)
         if not self._tracked_waypoints:
             if self._plan_pose is not None:
                 gp = self._plan_pose.pose
@@ -1461,12 +1924,13 @@ class MissionControlGUI(QMainWindow):
         self.status_state.setStyleSheet(f'font-weight:bold;font-size:18px;color:{color};')
         self._apply_banner(state)
         self.status_mission.setText(f'mission: {msg.mission_id}')
-        self.status_wp.setText(f'waypoint: {msg.current_waypoint}/{msg.total_waypoints}')
+        self._refresh_status_wp(msg.current_waypoint)
         if state in ('COMPLETED', 'CANCELED', 'ABORTED', 'REJECTED'):
             self.status_dist.setText('remaining: 0.00 m')
             self.status_eta.setText('ETA: 0s')
 
         self._refresh_lamps()
+        self._refresh_workflow()
 
         if (self._tracked_mission and msg.mission_id == self._tracked_mission
                 and state == 'NAVIGATING'):
@@ -1500,10 +1964,6 @@ class MissionControlGUI(QMainWindow):
         central = self.centralWidget()
         if central is not None:
             self.backdrop.setGeometry(central.rect())
-
-    def _guard_state(self, allowed, warning):
-        if self._status_state not in allowed:
-            self._log('warn', f'{warning} (state={self._status_state})')
 
     _STYLE = {
         'system': ('#9e9e9e', 'SYS'),

@@ -83,13 +83,67 @@ Inside the GUI, the button flow is the **only** flow you need:
 
 | Step | Button | What happens |
 |------|--------|--------------|
-| 1 | **Launch Simulation** | Gazebo opens with the selected world (Office by default) and RViz |
-| 2 | **Load Map + Activate Nav2** | Nav2 servers + AMCL localization + map + coordinator start |
+| 1 | **Launch Map** | Gazebo opens with the selected world (Office by default) and RViz |
+| 2 | **Load Map + Nav** | Nav2 servers + AMCL localization + map + coordinator start |
 | 3 | **Set Initial Pose** | Robot is placed at the environment's configured spawn on `/initialpose` |
 | 4 | Pick a goal → **Start Mission** | Robot navigates; every event appears in the live log |
 
 No `ros2 topic` commands are ever required during testing — the buttons
 publish them for you.
+
+### Workflow guardrails
+
+Each stage unlocks only when the previous one is verified running (the GUI
+watches the actual `ros2` processes every 2 s):
+
+- **Greyed-out controls** are still clickable and, instead of silently doing
+  nothing, show a **red error bar** naming the exact button you need to press.
+- The required button briefly **pulses with a soft red/white glow** until the
+  stage is completed.
+- **Stage 2 counts as complete only when the Nav2 stack is fully online**:
+  the environment's params file plus the shared `lifecycle_manager` and
+  `navigation_coordinator_node` must all be running. If the nav launch dies
+  before going fully online, the red bar reports the missing components and
+  tells you to press **Load Map + Nav** again.
+- **All five executor commands are gated the same way**: **Start**, **Pause**,
+  **Resume**, **Cancel Goal** and **Replace Goal** first require the full
+  workflow (Launch Map → Load Map + Nav fully online → Set Initial Pose) and an
+  online executor; otherwise they show the red error bar and publish nothing,
+  instead of sending a command the coordinator would ignore. Pause/Resume/Cancel
+  additionally verify the mission state (`NAVIGATING`/`PAUSED`) and refuse an
+  irrelevant command the same way.
+- Pressing **Set Initial Pose** before it is allowed (Map not up, or Map+Nav
+  not fully online) is blocked; pressing it again after it is set shows an
+  "Already localised" dialog instead of re-publishing.
+- **Waypoint mode** refuses *consecutive duplicate* waypoints (same point
+  within 0.5 m and same heading), and the coordinate boxes stay editable in
+  waypoint mode so you can compose each waypoint before adding it.
+- Switching the **Environment** clears all waypoints and resets the initial pose
+  so the previous world's plan can never leak into the new one.
+- In **Single Goal** mode the coordinate boxes are read-only unless **Custom
+  (type coords below)** is selected in the POI dropdown, and the Mission Status
+  waypoint line reads `waypoint: 1/1` (a single goal has no waypoint list).
+- **POI and typed coordinates are one unified input**: typing X/Y/X again over
+  an existing POI auto-selects that POI and snaps the boxes to its exact values;
+  a pose that matches no POI (within 0.5 m) falls back to **Custom**. Picking a
+  preset POI snaps the coordinate boxes to it accordingly.
+- **Start Mission is blocked while a mission is active** — while
+  `NAVIGATING`/`PAUSED`/… the button is greyed out; pressing it shows a red bar
+  (and pulses **Replace Goal**) instead of publishing a command the coordinator
+  would reject as "mission already active".
+- **Replace Goal requires a paused mission with a changed plan**: it needs
+  `PAUSED` **and** a goal or waypoint list different from the running mission
+  (order matters). Pressing it while driving → "PAUSED first"; while paused with
+  an unchanged plan → red bar telling you to change the goal/waypoints. The
+  current mission is remembered automatically so an identical guess can't be
+  re-sent.
+- **The waypoint adder/greys while a waypoint mission drives**: Add / Remove /
+  Clear are greyed out during `NAVIGATING`; once the mission is **paused** they
+  unlock so you can build a new route before pressing **Replace Goal** (adding
+  waypoints while driving is blocked with a "Pause it" red bar).
+- **Replacing / switching env resets the remembered plan**: after a successful
+  Replace (or mission end, or env switch) the remembered running plan is cleared,
+  so the next Replace press is gated on a genuinely new plan.
 
 ---
 
@@ -107,8 +161,8 @@ ros2 run ms04_autonomous_navigation mission_control_gui
 ### Steps
 
 1. **Select `Office`** in the Environment dropdown (default).
-2. Press **Launch Simulation**. Wait for the log to show `Launched simulation: Office (office_simulation.launch.py)` and for Gazebo + RViz to open with the Waffle in the office world.
-3. Press **Load Map + Activate Nav2**. Wait for `Activated Nav2 + map load: Office (office_navigation.launch.py) with launch_sim:=false`.
+2. Press **Launch Map**. Wait for the log to show `Launched simulation: Office (office_simulation.launch.py)` and for Gazebo + RViz to open with the Waffle in the office world.
+3. Press **Load Map + Nav** and wait until it is fully online (the log shows it as active; waypoint/goal stages unlock only then).
 4. Press **Set Initial Pose**. The robot appears localized in RViz (green scan lines on the map).
 5. Set Mode = **Waypoints**. From the **POI** dropdown add these three stops with **Add as Waypoint**:
    - `NW Conference`
@@ -129,7 +183,7 @@ ros2 run ms04_autonomous_navigation mission_control_gui
 
 Repeat section 5 with Env = **Warehouse**. Differences:
 
-- **Launch Simulation** → `Launched simulation: Warehouse (warehouse_simulation.launch.py)`, world has high-bay racks, spawn at `(-6.0, 0.0)`.
+- **Launch Map** → `Launched simulation: Warehouse (warehouse_simulation.launch.py)`, world has high-bay racks, spawn at `(-6.0, 0.0)`.
 - Suggested waypoint route: `Loading Dock (West)` → `Rack B (South)` → `East Storage`.
 - The **Warehouse** Nav2 profile is tuned faster (`max_vel_x 0.9`) — expect longer, quicker straights and wider turns around pallet racks.
 
@@ -144,7 +198,7 @@ Start any mission, then exercise the controls:
 | While the robot drives, halt it | **Pause** | `State: PAUSED`; robot stops; lamp turns **Paused** |
 | Continue again | **Resume** | `State: NAVIGATING`; robot re-dispatches from the pause point |
 | Stop the mission outright | **Cancel Goal** | `EVENT_GOAL_CANCELED`, `State: CANCELED`; lamps go dark; distance/ETA reset to `0.00 m / ~0s` |
-| Change target mid-route | pick a new goal, then **Replace Goal** | `EVENT_GOAL_REPLACED`; robot abandons the old route and heads to the new goal |
+| Change target mid-route | press **Pause** first, then pick a new goal / waypoints, then **Replace Goal** | `EVENT_GOAL_REPLACED`; robot abandons the old route and heads to the new goal. **Replace** only works while `PAUSED` and with a plan different from the running mission — otherwise a red bar explains what is missing |
 
 > **Single-goal missions never light waypoint lamps** — by design the lamps
 > report waypoint-group status only.
@@ -156,9 +210,9 @@ Start any mission, then exercise the controls:
 With the **Office** stack fully running:
 
 1. Set Env = **Warehouse** in the dropdown (only the POI list swaps immediately).
-2. Press **Launch Simulation**.
+2. Press **Launch Map**.
 3. Expect a log warning `Stopping Office stack ... before switching environment`, then the Office simulation, Nav2, RViz **and coordinator processes are stopped cleanly** before the Warehouse simulation starts — no second Gazebo, no port conflict.
-4. Press **Load Map + Activate Nav2** then **Set Initial Pose** to bring up Warehouse navigation.
+4. Press **Load Map + Nav** (wait for it to go fully online) then **Set Initial Pose** to bring up Warehouse navigation.
 
 ---
 
@@ -166,7 +220,7 @@ With the **Office** stack fully running:
 
 | Panel | Controls |
 |-------|----------|
-| Environment & Navigation | Env selector (Office / Warehouse), **Launch Simulation**, **Load Map + Activate Nav2**, **Set Initial Pose** |
+| Environment & Navigation | Env selector (Office / Warehouse), **Launch Map**, **Load Map + Nav**, **Set Initial Pose** |
 | Goal & Waypoint Dispatcher | Mode (Single Goal / Waypoints), X / Y / Theta inputs, POI dropdown per environment, Add/Remove/Clear waypoint list |
 | Execution Control | Start, Pause, Resume, Cancel Goal, Replace Goal (color-coded buttons) |
 | Mission Status | Live state, mission id, current pose, distance remaining, ETA, current waypoint, target |
@@ -212,7 +266,7 @@ paused / completed / failed) as a visual cue.
 | Rack A (North) | (5.0, 6.0, 0.0) |
 | Rack B (South) | (5.0, -6.0, 0.0) |
 
-You can also type raw X / Y / Theta — any typed pose within `POI_MATCH_TOLERANCE` (0.5 m) of a predefined POI is auto-labelled with the POI name in the waypoint list.
+You can also type raw X / Y / Theta — any typed pose within `POI_MATCH_TOLERANCE` (0.5 m) of a predefined POI is auto-labelled with the POI name in the waypoint list, and the POI dropdown follows live as you type (matching → that POI selected with snapped values; otherwise → **Custom**).
 
 ---
 
@@ -326,10 +380,10 @@ unreachable slivers, not timeout artifacts.
 2. **`TURTLEBOT3_MODEL`** — must be `waffle` or the robot model fails to spawn.
 3. **Timing** — Gazebo takes a few seconds; wait for the log line matching the launch before pressing the next button. Launching again while the stack is still starting logs a duplicate warning.
 
-### "No Office simulation detected" when Activating Nav2
+### "No Office simulation detected" when activating Nav2
 
-The **Load Map + Activate Nav2** button attaches to an already-running sim —
-press **Launch Simulation** first.
+The **Load Map + Nav** button attaches to an already-running sim —
+press **Launch Map** first.
 
 ### Two Gazebo instances / port conflicts
 
