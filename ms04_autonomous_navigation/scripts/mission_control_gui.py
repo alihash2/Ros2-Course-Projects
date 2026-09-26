@@ -643,6 +643,9 @@ class MissionControlGUI(QMainWindow):
         self._pose_set = False
         self._sim_up = False
         self._nav_up = False
+        self._exec_up = False
+        self._nav_launch_requested = False
+        self._nav_fault_logged = False
         self._custom_selected = False
         self._pulse_timers = {}
         self._error_timer = None
@@ -666,8 +669,9 @@ class MissionControlGUI(QMainWindow):
         self._verify_timer.timeout.connect(self._verify_stack)
         self._verify_timer.start()
         self._log('system',
-                  'GUI ready. Workflow: 1) Launch Simulation, '
-                  '2) Load Map + Activate Nav2, 3) Set Initial Pose, '
+                  'GUI ready. Workflow: 1) Launch Map, '
+                  '2) Load Map + Nav (wait for it to fully start), '
+                  '3) Set Initial Pose, '
                   '4) dispatch a goal below. Follow the enabled buttons.')
 
     # ------------------------------------------------------------------ ROS
@@ -787,9 +791,9 @@ class MissionControlGUI(QMainWindow):
         layout.addLayout(env_row)
 
         btn_row = QHBoxLayout()
-        self.btn_launch_sim = QPushButton('Launch Simulation')
+        self.btn_launch_sim = QPushButton('Launch Map')
         self.btn_launch_sim.clicked.connect(self._on_launch_sim)
-        self.btn_activate_nav = QPushButton('Load Map + Activate Nav2')
+        self.btn_activate_nav = QPushButton('Load Map + Nav')
         self.btn_activate_nav.clicked.connect(self._on_activate_nav)
         btn_row.addWidget(self.btn_launch_sim)
         btn_row.addWidget(self.btn_activate_nav)
@@ -1060,6 +1064,9 @@ class MissionControlGUI(QMainWindow):
         self._pose_set = False
         self._sim_up = False
         self._nav_up = False
+        self._exec_up = False
+        self._nav_launch_requested = False
+        self._nav_fault_logged = False
         self._env_key = self.env_combo.currentData()
         self._populate_env(self._env_key)
         self._refresh_status_wp()
@@ -1122,23 +1129,28 @@ class MissionControlGUI(QMainWindow):
         widget.setStyleSheet(self._DIM_BTN if on else '')
 
     def _pulse_button(self, button, on):
-        """Start/stop a red pulsing border glow on a button to highlight it as
-        the next required action."""
+        """Start/stop a soft glow on a button to point the user at the next
+        required action: the colour alternates gently between white and red
+        (previous version flashed the border too aggressively)."""
         if on:
             if id(button) in self._pulse_timers:
                 return
             eff = QGraphicsDropShadowEffect(button)
-            eff.setBlurRadius(16)
+            eff.setBlurRadius(22)
             eff.setOffset(0, 0)
             button.setGraphicsEffect(eff)
             timer = QTimer(button)
-            timer.setInterval(230)
-            state = {'hi': True}
+            timer.setInterval(800)
+            state = {'white': True}
 
             def tick():
-                state['hi'] = not state['hi']
-                eff.setColor(QColor(255, 60, 60, 235 if state['hi'] else 55))
-                eff.setBlurRadius(30 if state['hi'] else 10)
+                state['white'] = not state['white']
+                if state['white']:
+                    eff.setColor(QColor(255, 255, 255, 70))
+                    eff.setBlurRadius(30)
+                else:
+                    eff.setColor(QColor(255, 70, 70, 85))
+                    eff.setBlurRadius(24)
 
             timer.timeout.connect(tick)
             timer.start()
@@ -1184,44 +1196,81 @@ class MissionControlGUI(QMainWindow):
         for _timer, _eff, button in list(self._pulse_timers.values()):
             self._pulse_button(button, False)
 
+    _NAV_REQUIRED = (['lifecycle_manager'], ['navigation_coordinator_node'])
+
+    def _nav_online(self):
+        """Full online check for the current env's Nav2/map stack: the env
+        params marker plus the shared lifecycle manager and coordinator must all
+        be running together before the step counts as complete."""
+        missing = []
+        for needles in [_NAV_MARKERS[self._env_key]] + list(self._NAV_REQUIRED):
+            if not _pids_matching(needles):
+                missing.append(needles[0])
+        return (not missing), missing
+
     def _verify_stack(self):
-        """Background guardrail check: watch the selected environment's sim/nav
-        processes and unlock the next workflow stage once the stack is verified
-        up."""
+        """Background guardrail check: watch the current env's sim + Nav2/map
+        processes, unlock the workflow stages in order (Launch Map -> Load Map +
+        Nav fully online -> initial pose -> executor online) and surface
+        incomplete/faulty startup with the exact missing component."""
         cfg = ENVS[self._env_key]
         sim = bool(_pids_matching(_SIM_MARKERS[self._env_key]))
-        nav = bool(_pids_matching(_NAV_MARKERS[self._env_key]))
+        exec_up = bool(_pids_matching(['navigation_coordinator_node']))
+        nav_ok, missing = self._nav_online()
+
         if sim and not self._sim_up:
             self._log('info', f"{cfg['label']} simulation verified running")
-        if nav and not self._nav_up:
-            self._log('info', f"{cfg['label']} Nav2/map stack verified running")
+        if nav_ok and not self._nav_up:
+            self._log('info',
+                      f"{cfg['label']} Nav2/map stack fully online "
+                      '(params + lifecycle_manager + coordinator)')
+            self._nav_launch_requested = False
+            self._nav_fault_logged = False
+        elif (self._nav_launch_requested and not nav_ok and not self._nav_fault_logged
+              and not _pids_matching(['ros2 launch ms04_autonomous_navigation'])):
+            # the launch parent died before the stack came fully online
+            self._nav_fault_logged = True
+            self._show_error(
+                f'{cfg["label"]} Nav2/map startup failed before going fully '
+                f'online: missing {", ".join(missing)}. Stop the stack and '
+                'press "Load Map + Nav" again.')
+            self._log('error',
+                      f"{cfg['label']} Nav2/map startup incomplete: "
+                      f'{", ".join(missing)} not detected')
+
         self._sim_up = sim
-        self._nav_up = nav
+        self._nav_up = nav_ok
+        self._exec_up = exec_up
         self._refresh_workflow()
 
     def _refresh_workflow(self):
         """Recompute which widgets are dimmed vs active from the workflow stage
-        (boot -> sim up -> nav up -> pose set)."""
+        (boot -> Launch Map -> Load Map + Nav fully online -> initial pose ->
+        executor online) and from the selected mode (single vs waypoints)."""
         sim_up = self._sim_up
         nav_up = self._nav_up
-        dispatch_ready = self._pose_set and nav_up
+        exec_up = self._exec_up
+        wp_mode = self.mode_combo.currentIndex() == 1
+        dispatch_ready = self._pose_set and nav_up and exec_up
 
         self._set_dim(self.btn_launch_sim, False)
         self._set_dim(self.btn_activate_nav, not sim_up)
         self._set_dim(self.btn_set_initial_pose, not nav_up)
+
         self._set_dim(self.mode_combo, not dispatch_ready)
         self._set_dim(self.poi_combo, not dispatch_ready)
         self._update_pose_inputs()
 
-        wp_mode = dispatch_ready and self.mode_combo.currentIndex() == 1
-        self.btn_add_wp.setEnabled(wp_mode)
-        self.btn_remove_wp.setEnabled(wp_mode)
-        self.btn_clear_wp.setEnabled(wp_mode)
-        self.wp_list.setEnabled(wp_mode)
+        wp_area = dispatch_ready and wp_mode
+        self.btn_add_wp.setEnabled(wp_area)
+        self.btn_remove_wp.setEnabled(wp_area)
+        self.btn_clear_wp.setEnabled(wp_area)
+        self.wp_list.setEnabled(wp_area)
 
         st = self._status_state
+        start_ok = dispatch_ready and (not wp_mode or self.wp_list.count() > 0)
         ctrl = {
-            self.btn_start: dispatch_ready,
+            self.btn_start: start_ok,
             self.btn_pause: dispatch_ready and st == 'NAVIGATING',
             self.btn_resume: dispatch_ready and st == 'PAUSED',
             self.btn_cancel: dispatch_ready and st in ('NAVIGATING', 'PAUSED'),
@@ -1231,11 +1280,15 @@ class MissionControlGUI(QMainWindow):
             self._set_dim(btn, not on)
 
     def _update_pose_inputs(self):
-        custom = self._custom_selected
-        ready = self._pose_set and self._nav_up
+        """Coordinate/spin area: usable only once the dispatch stage is ready,
+        and only in Single Goal + Custom, or in Waypoint mode (where the same
+        box is how waypoints are composed)."""
+        ready = self._pose_set and self._nav_up and self._exec_up
+        wp_mode = self.mode_combo.currentIndex() == 1
+        enable = ready and (self._custom_selected or wp_mode)
         for spin in (self.spin_x, self.spin_y, self.spin_yaw):
-            spin.setEnabled(ready and custom)
-            self._set_dim(spin, not (ready and custom))
+            spin.setEnabled(enable)
+            self._set_dim(spin, not enable)
 
     def _refresh_status_wp(self, current=None):
         """Waypoint line: reflect the tracker count (N) in Waypoint mode and
@@ -1251,19 +1304,42 @@ class MissionControlGUI(QMainWindow):
             self.status_wp.setText('waypoint: 1/1')
 
     def _require_ready(self):
-        if self._pose_set and self._nav_up:
+        """Dispatch gate that follows the 4-stage workflow order. The initial
+        pose is only required if it has not been set yet."""
+        if not self._sim_up:
+            self._show_error('No world is loaded yet. Press "Launch Map" first.',
+                             [self.btn_launch_sim])
+            return False
+        if not self._nav_up:
+            self._show_error('The map is loaded but Nav2 is not fully online '
+                             'yet. Press "Load Map + Nav" and wait for the '
+                             'stack to finish starting.',
+                             [self.btn_activate_nav])
+            return False
+        if not self._pose_set:
+            self._show_error('The robot has no initial pose yet. Press '
+                             '"Set Initial Pose".',
+                             [self.btn_set_initial_pose])
+            return False
+        return True
+
+    def _require_executor(self):
+        if self._exec_up:
             return True
         self._show_error(
-            'The robot is not localised yet. Press "Set Initial Pose" first.',
-            [self.btn_set_initial_pose])
+            'The navigation executor (coordinator) is not online yet. Wait for '
+            '"Load Map + Nav" to finish starting, then try again.',
+            [self.btn_activate_nav])
         return False
 
-    def _require_sim(self):
-        if _pids_matching(_SIM_MARKERS[self._env_key]):
+    def _guard_executor(self, allowed, message, button):
+        """Block an in-flight executor command and explain via the red bar
+        instead of silently publishing a command the coordinator would ignore."""
+        if self._status_state in allowed:
             return True
-        self._show_error(
-            'Start the simulation first: select the environment and press '
-            '"Launch Simulation".', [self.btn_launch_sim])
+        self._log('warn', f'{message} (state={self._status_state})')
+        self._show_error(f'{message} (current state: {self._status_state}).',
+                         [button])
         return False
 
     def _stop_other_env_stack(self):
@@ -1312,12 +1388,11 @@ class MissionControlGUI(QMainWindow):
         self._stop_other_env_stack()
         sim_pids = _pids_matching(_SIM_MARKERS[self._env_key])
         if not sim_pids:
-            self._log('warn', f"No {cfg['label']} simulation detected - start it "
-                              'with "Launch Simulation" first, otherwise the robot '
-                              'will be missing')
+            self._log('warn', f"No {cfg['label']} simulation detected - start "
+                              'the world first, otherwise the robot will be missing')
             self._show_error(
-                f'No {cfg["label"]} simulation detected. Press "Launch '
-                'Simulation" first.', [self.btn_launch_sim])
+                f'No {cfg["label"]} world running. Press "Launch Map" first.',
+                [self.btn_launch_sim])
             return
         other_sim = [k for k in ENVS
                      if k != self._env_key and _pids_matching(_SIM_MARKERS[k])]
@@ -1330,6 +1405,8 @@ class MissionControlGUI(QMainWindow):
                 f'Switch to that environment or stop it before activating '
                 f'{cfg["label"]} Nav2.')
             return
+        self._nav_launch_requested = True
+        self._nav_fault_logged = False
         self._run_launch(cfg['nav_launch'], args={'launch_sim': 'false', 'gui': 'true'})
         self._log('system',
                   f"Activated Nav2 + map load: {cfg['label']} ({cfg['nav_launch']}) "
@@ -1352,15 +1429,13 @@ class MissionControlGUI(QMainWindow):
         x, y, yaw = cfg['initial_pose']
         if not _pids_matching(_SIM_MARKERS[self._env_key]):
             self._show_error(
-                f'Simulation is not running for {cfg["label"]}. Start it with '
-                '"Launch Simulation" before localising the robot.',
-                [self.btn_launch_sim])
+                f'{cfg["label"]} is not running yet. Press "Launch Map" '
+                'before localising the robot.', [self.btn_launch_sim])
             return
         if not _pids_matching(_NAV_MARKERS[self._env_key]):
             self._show_error(
                 f'Nav2 is not active for {cfg["label"]}. Press "Load Map + '
-                'Activate Nav2" before setting the initial pose.',
-                [self.btn_activate_nav])
+                'Nav" before setting the initial pose.', [self.btn_activate_nav])
             return
         if self._pose_set:
             QMessageBox.information(
@@ -1419,7 +1494,7 @@ class MissionControlGUI(QMainWindow):
         return (NavigationMission.MODE_WAYPOINTS, None, poses)
 
     def _on_start(self):
-        if not self._require_sim():
+        if not (self._require_ready() and self._require_executor()):
             return
         active = self._status_state in ('NAVIGATING', 'PAUSED')
         self._guard_state(
@@ -1448,28 +1523,40 @@ class MissionControlGUI(QMainWindow):
         self._log('command', f'START mission {mission_id} ({desc})')
 
     def _on_pause(self):
-        self._guard_state({'NAVIGATING'},
-                          'Pause needs an active (NAVIGATING) mission; coordinator may ignore')
+        if not (self._require_ready() and self._require_executor()):
+            return
+        if not self._guard_executor(
+                {'NAVIGATING'},
+                'Pause needs an active (NAVIGATING) mission', self.btn_pause):
+            return
         self._publish_mission(NavigationMission.COMMAND_PAUSE,
                               NavigationMission.MODE_GO_TO_POSE, self._next_mission_id())
         self._log('command', 'PAUSE sent - robot stops, mission kept for resume')
 
     def _on_resume(self):
-        self._guard_state({'PAUSED'},
-                          'Resume needs a PAUSED mission; coordinator may ignore')
+        if not (self._require_ready() and self._require_executor()):
+            return
+        if not self._guard_executor(
+                {'PAUSED'},
+                'Resume needs a PAUSED mission', self.btn_resume):
+            return
         self._publish_mission(NavigationMission.COMMAND_RESUME,
                               NavigationMission.MODE_GO_TO_POSE, self._next_mission_id())
         self._log('command', 'RESUME sent - remaining waypoints continue')
 
     def _on_cancel(self):
-        self._guard_state({'NAVIGATING', 'PAUSED'},
-                          'Cancel has no active mission to stop; coordinator may ignore')
+        if not (self._require_ready() and self._require_executor()):
+            return
+        if not self._guard_executor(
+                {'NAVIGATING', 'PAUSED'},
+                'Cancel needs an active mission to stop', self.btn_cancel):
+            return
         self._publish_mission(NavigationMission.COMMAND_CANCEL,
                               NavigationMission.MODE_GO_TO_POSE, self._next_mission_id())
         self._log('command', 'CANCEL sent - mission aborted')
 
     def _on_replace(self):
-        if not self._require_sim():
+        if not (self._require_ready() and self._require_executor()):
             return
         plan = self._current_plan()
         if plan is None:
@@ -1486,8 +1573,6 @@ class MissionControlGUI(QMainWindow):
         self._dispatch_replace(plan)
 
     def _dispatch_replace(self, plan=None):
-        if not self._require_sim():
-            return
         if plan is None:
             plan = self._current_plan()
             if plan is None:
