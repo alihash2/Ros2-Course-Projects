@@ -4,7 +4,9 @@
 Sections:
   - Environment controls: simulation launcher for Office / Warehouse
   - Map loader + Nav2 activation button (reuses the AMCL navigation launches)
-  - Initial pose trigger (predefined spawn pose published on /initialpose)
+  - Initial pose trigger (true live robot pose from Gazebo published on
+    /initialpose; falls back to the current localization estimate mid-session,
+    spawn constant only while no pose is known at all)
   - Goal & waypoint dispatcher: single pose (X, Y, Theta), predefined POIs,
     multi-waypoint list builder
   - Execution controls: start / cancel / pause / resume / replace
@@ -20,6 +22,7 @@ import sys
 import time
 import math
 import random
+import functools
 from collections import OrderedDict
 
 if sys.platform.startswith('linux') and 'QT_QPA_PLATFORM' not in os.environ:
@@ -37,8 +40,10 @@ from PyQt5.QtWidgets import (
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import (
+    QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy)
 
-from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
+from geometry_msgs.msg import PoseArray, PoseStamped, PoseWithCovarianceStamped
 from ms04_autonomous_navigation.msg import (
     NavigationEvent, NavigationMission, NavigationStatus)
 
@@ -48,6 +53,7 @@ ENVS = OrderedDict({
     'office': {
         'label': 'Office',
         'world': 'office.world',
+        'gz_world': 'office_world',
         'sim_launch': 'office_simulation.launch.py',
         'nav_launch': 'office_navigation.launch.py',
         'spawn': (0.0, 0.0, 0.0),
@@ -64,6 +70,7 @@ ENVS = OrderedDict({
     'warehouse': {
         'label': 'Warehouse',
         'world': 'warehouse.world',
+        'gz_world': 'warehouse_world',
         'sim_launch': 'warehouse_simulation.launch.py',
         'nav_launch': 'warehouse_navigation.launch.py',
         'spawn': (-6.0, 0.0, 0.0),
@@ -82,6 +89,18 @@ ENVS = OrderedDict({
 # How close (in metres) a typed/add pose must be to a predefined POI before the
 # waypoint list labels it with the POI name instead of raw coordinates.
 POI_MATCH_TOLERANCE = 0.5
+
+# A single-goal Start is skipped as "already here" when the robot's current
+# estimate sits within this distance and this heading error (rad) of the goal,
+# so dispatching a goal the robot is already sitting at never turns into a
+# pointless drive or in-place spin.
+ALREADY_AT_DISTANCE = 0.5
+ALREADY_AT_YAW_TOL = 0.35
+
+# Window (ms) during which a second press of a launch button is ignored, so a
+# rapid double-click cannot spawn a second, colliding stack while the first is
+# still coming up (its processes are not yet visible to the pid scan).
+LAUNCH_DEBOUNCE_MS = 6000
 
 # Accent tints used by the status banner. Turquoise night - a fresh, vibrant
 # teal-to-cyan family over a deep sea backdrop.
@@ -104,6 +123,18 @@ _BTN_GLOW = {
     'btnCancel': (110, 160, 170, 100),
     'btnReplace': (255, 122, 92, 105),
 }
+
+# Error highlight pulse: the required button transitions smoothly between a
+# bright white glow and a bright red glow (no hard colour jumps), sweeping the
+# full white->red->white cycle every ERROR_PULSE_PERIOD_MS and thickening the
+# halo as it brightens. Red-dominant endpoints read as "stop here", white adds
+# the attention flash on the dark skin.
+_ERROR_PULSE_RED = (255, 55, 55, 205)
+_ERROR_PULSE_WHITE = (255, 255, 255, 225)
+_ERROR_PULSE_BLUR_RED = 50
+_ERROR_PULSE_BLUR_WHITE = 62
+ERROR_PULSE_STEP_MS = 25
+ERROR_PULSE_PERIOD_MS = 600
 
 
 def _hex_rgb(h):
@@ -468,6 +499,11 @@ def _yaw_to_quat(yaw):
     return q
 
 
+def _quat_to_yaw(q):
+    return math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                      1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+
+
 # Command-line fragments used to detect our own sim/nav/rviz stacks so the GUI
 # never double-launches and can clean up cleanly on close.
 _SIM_MARKERS = {
@@ -479,6 +515,16 @@ _NAV_MARKERS = {
     'warehouse': ['params/warehouse_nav2_params.yaml'],
 }
 _RVIZ_MARKER = ['rviz2', 'nav2_gui_view.rviz']
+
+# Stack processes that belong to the navigation tier (not the simulation) and
+# must be restarted when "Load Map + Nav" is pressed without touching a healthy
+# running sim. The `ros2 launch` parent is deliberately excluded: SIGTERM would
+# make it gracefully shut its sim children down too.
+_STACK_NAV_ORPHAN_MARKERS = (
+    ['lifecycle_manager'],
+    ['navigation_coordinator_node'],
+    ['auto_slam_explorer'],
+)
 
 # Process families that belong to our stack but carry no per-env marker
 # (Gazebo GUI clients, bridge, relay, RSP, lifecycle managers, coordinator,
@@ -640,6 +686,8 @@ class MissionControlGUI(QMainWindow):
         self._tracked_plan = None
         self._plan_pose = None
         self._wp_offset = 0
+        self._gazebo_pose = {}
+        self._last_estimate_pose = None
 
         self._pose_set = False
         self._sim_up = False
@@ -647,6 +695,9 @@ class MissionControlGUI(QMainWindow):
         self._exec_up = False
         self._nav_launch_requested = False
         self._nav_fault_logged = False
+        self._sim_launch_requested = False
+        self._sim_fault_logged = False
+        self._launch_in_flight = False
         self._custom_selected = False
         self._syncing_coords = False
         self._pulse_timers = {}
@@ -654,6 +705,12 @@ class MissionControlGUI(QMainWindow):
 
         self._build_ros()
         self._build_ui()
+        others = _pids_matching(['mission_control_gui.py'])
+        if others:
+            self._log('warn',
+                      f'Another Mission Control instance is already running '
+                      f'(pids {sorted(others)}). Keep exactly one open so two '
+                      'GUIs do not fight over the same stack.')
         self._apply_banner('IDLE')
 
         self._ros_thread = RosSpinnerThread(self._node)
@@ -688,6 +745,29 @@ class MissionControlGUI(QMainWindow):
             NavigationEvent, '/navigation/events', self._events_cb, 10)
         self._status_sub = self._node.create_subscription(
             NavigationStatus, '/navigation/status', self._status_cb, 10)
+        # Live robot position straight from Gazebo (world frame) so "Set
+        # Initial Pose" can re-anchor AMCL on the true pose instead of a
+        # hardcoded constant. Best-effort/latest-wins (VOLATILE) so the
+        # one-sample pose stream is never dropped by a QoS mismatch.
+        latest_pose_qos = QoSProfile(
+            history=QoSHistoryPolicy.KEEP_LAST, depth=1,
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            durability=QoSDurabilityPolicy.VOLATILE)
+        for key, cfg in ENVS.items():
+            topic = f'/world/{cfg["gz_world"]}/dynamic_pose/info'
+            self._node.create_subscription(
+                PoseArray, topic,
+                functools.partial(self._model_pose_cb, key),
+                latest_pose_qos)
+
+    def _model_pose_cb(self, key, msg):
+        # dynamic_pose/info publishes every model pose in the world, the
+        # top-level model first (its links follow with near-zero, model
+        # relative poses). poses[0] is the robot's world-frame pose.
+        if not msg.poses:
+            return
+        p = msg.poses[0]
+        self._gazebo_pose[key] = (p.position.x, p.position.y, _quat_to_yaw(p.orientation))
 
     def _events_cb(self, msg):
         self._ros_thread.event_received.emit(msg)
@@ -717,6 +797,7 @@ class MissionControlGUI(QMainWindow):
                 self._log('info', f'{label}: not running')
 
     def _publish_mission(self, command, mode, mission_id, pose=None, waypoints=None):
+        self._clear_error()
         msg = NavigationMission()
         msg.header.stamp = self._node.get_clock().now().to_msg()
         msg.header.frame_id = 'map'
@@ -807,7 +888,7 @@ class MissionControlGUI(QMainWindow):
         layout.addWidget(hint)
 
         pose_row = QHBoxLayout()
-        self.btn_set_initial_pose = QPushButton('Set Initial Pose (Spawn)')
+        self.btn_set_initial_pose = QPushButton('Set Initial Pose')
         self.btn_set_initial_pose.clicked.connect(self._on_set_initial_pose)
         self.spawn_label = QLabel('')
         pose_row.addWidget(self.btn_set_initial_pose)
@@ -843,6 +924,7 @@ class MissionControlGUI(QMainWindow):
         self.spin_yaw.setSingleStep(0.1)
         self.spin_x.valueChanged.connect(self._sync_poi_from_coords)
         self.spin_y.valueChanged.connect(self._sync_poi_from_coords)
+        self.spin_yaw.valueChanged.connect(self._sync_poi_from_coords)
         for spin in (self.spin_x, self.spin_y, self.spin_yaw):
             spin.valueChanged.connect(self._refresh_workflow)
         pose_form = QHBoxLayout()
@@ -1062,11 +1144,26 @@ class MissionControlGUI(QMainWindow):
     def _on_env_changed(self, _index):
         if self.env_combo.currentData() == self._env_key:
             return
+        if self._status_state in ('NAVIGATING', 'PAUSED'):
+            self.env_combo.blockSignals(True)
+            self.env_combo.setCurrentIndex(
+                self.env_combo.findData(self._env_key))
+            self.env_combo.blockSignals(False)
+            self._show_error(
+                'Cannot switch environments while a mission is '
+                f'{self._status_state}. Cancel or finish the current '
+                'mission first.',
+                [self.btn_cancel])
+            self._log('warn', f'Environment switch blocked while '
+                              f'{self._status_state}')
+            return
+        self._clear_error()
         self.wp_list.clear()
         self._tracked_mission = None
         self._tracked_waypoints = False
         self._tracked_plan = None
         self._plan_pose = None
+        self._last_estimate_pose = None  # map frame differs per environment
         self._wp_offset = 0
         self._pose_set = False
         self._sim_up = False
@@ -1091,10 +1188,10 @@ class MissionControlGUI(QMainWindow):
             self.poi_combo.addItem(name)
         self.poi_combo.addItem('Custom (type coords below)')
         self.poi_combo.blockSignals(False)
-        ix, iy, iyaw = cfg['initial_pose']
         self.spawn_label.setText(
-            f'map initial pose ({ix:.1f}, {iy:.1f}, {iyaw:.2f} rad) '
-            f'· world spawn ({cfg["spawn"][0]:.1f}, {cfg["spawn"][1]:.1f})')
+            f'world spawn ({cfg["spawn"][0]:.1f}, {cfg["spawn"][1]:.1f}) · '
+            '"Set Initial Pose" re-anchors AMCL on the robot\'s live pose '
+            '(never a fixed spawn)')
         self._custom_selected = False
         self._apply_poi(0)
 
@@ -1123,14 +1220,26 @@ class MissionControlGUI(QMainWindow):
         self._refresh_workflow()
 
     def _sync_poi_from_coords(self):
-        """Unified POI <-> coordinate input: the X/Y coordinates you typed are
-        the single source of truth. Matching a predefined POI (within the
-        tolerance) automatically selects that POI and snaps the pose to its
-        exact values; any other coordinate selects 'Custom'. The two controls
-        can never disagree about which goal would actually be dispatched."""
+        """Unified POI <-> coordinate input: the X/Y/Theta coordinates you typed
+        are the single source of truth. Editing any coordinate while a preset
+        POI is selected immediately switches the POI intent to Custom (no
+        snapping back); from Custom, typing a pose that matches a predefined
+        POI (within the tolerance) auto-selects that POI and snaps the pose to
+        its exact values. The two controls can never disagree about which goal
+        would actually be dispatched."""
         if self._syncing_coords:
             return
         cfg = ENVS[self._env_key]
+        if not self._custom_selected:
+            # Editing a preset POI's pose means the preset intent is gone:
+            # lock in as Custom and keep whatever the user typed.
+            self._custom_selected = True
+            self.poi_combo.blockSignals(True)
+            self.poi_combo.setCurrentIndex(self.poi_combo.count() - 1)
+            self.poi_combo.blockSignals(False)
+            self._update_pose_inputs()
+            self._refresh_workflow()
+            return
         x = self.spin_x.value()
         y = self.spin_y.value()
         poi_keys = list(cfg['pois'].keys())
@@ -1140,12 +1249,6 @@ class MissionControlGUI(QMainWindow):
                 match = (name, px, py, pyaw)
                 break
         if match is None:
-            if not self._custom_selected:
-                self.poi_combo.blockSignals(True)
-                self.poi_combo.setCurrentIndex(self.poi_combo.count() - 1)
-                self.poi_combo.blockSignals(False)
-                self._custom_selected = True
-            self._update_pose_inputs()
             return
         name, px, py, pyaw = match
         self._syncing_coords = True
@@ -1181,28 +1284,36 @@ class MissionControlGUI(QMainWindow):
         widget.setStyleSheet(self._DIM_BTN if on else '')
 
     def _pulse_button(self, button, on):
-        """Start/stop a soft glow on a button to point the user at the next
-        required action: the colour alternates gently between white and red
-        (previous version flashed the border too aggressively)."""
+        """Start/stop the error highlight on a button. Instead of hard-swapping
+        colours, the glow sweeps smoothly from red to white and back
+        (QGraphicsDropShadowEffect colour + halo radius are interpolated every
+        ERROR_PULSE_STEP_MS), so the button continuously transits between the
+        two bright states rather than flashing them."""
         if on:
             if id(button) in self._pulse_timers:
                 return
             eff = QGraphicsDropShadowEffect(button)
-            eff.setBlurRadius(22)
             eff.setOffset(0, 0)
             button.setGraphicsEffect(eff)
             timer = QTimer(button)
-            timer.setInterval(800)
-            state = {'white': True}
+            timer.setInterval(ERROR_PULSE_STEP_MS)
+            st = {'t0': time.perf_counter() * 1000.0}
+            (rr, rg, rb, ra), (wr, wg, wb, wa) = (
+                _ERROR_PULSE_RED, _ERROR_PULSE_WHITE)
 
             def tick():
-                state['white'] = not state['white']
-                if state['white']:
-                    eff.setColor(QColor(255, 255, 255, 70))
-                    eff.setBlurRadius(30)
-                else:
-                    eff.setColor(QColor(255, 70, 70, 85))
-                    eff.setBlurRadius(24)
+                phase = (((time.perf_counter() * 1000.0 - st['t0'])
+                          % ERROR_PULSE_PERIOD_MS) / ERROR_PULSE_PERIOD_MS)
+                # 0..1 out-and-back sweep: red -> white -> red per period.
+                frac = phase * 2.0 if phase < 0.5 else 2.0 - phase * 2.0
+                eff.setColor(QColor(
+                    int(round(rr + (wr - rr) * frac)),
+                    int(round(rg + (wg - rg) * frac)),
+                    int(round(rb + (wb - rb) * frac)),
+                    int(round(ra + (wa - ra) * frac))))
+                eff.setBlurRadius(_ERROR_PULSE_BLUR_RED
+                                  + (_ERROR_PULSE_BLUR_WHITE
+                                     - _ERROR_PULSE_BLUR_RED) * frac)
 
             timer.timeout.connect(tick)
             timer.start()
@@ -1244,6 +1355,8 @@ class MissionControlGUI(QMainWindow):
         self._error_timer.start(10000)
 
     def _clear_error(self):
+        if self._error_timer is not None:
+            self._error_timer.stop()
         self.error_bar.setVisible(False)
         for _timer, _eff, button in list(self._pulse_timers.values()):
             self._pulse_button(button, False)
@@ -1272,6 +1385,21 @@ class MissionControlGUI(QMainWindow):
 
         if sim and not self._sim_up:
             self._log('info', f"{cfg['label']} simulation verified running")
+        if sim:
+            self._sim_launch_requested = False
+            self._sim_fault_logged = False
+        elif (self._sim_launch_requested and not self._sim_fault_logged
+              and not _pids_matching(['ros2 launch ms04_autonomous_navigation'])):
+            # the sim launch parent died before any world process appeared
+            self._sim_fault_logged = True
+            self._show_error(
+                f'{cfg["label"]} simulation launch failed before fully '
+                f'starting (no {cfg["world"]} process detected). Stop any '
+                'leftover stack and press "Launch Map" again.',
+                [self.btn_launch_sim])
+            self._log('error',
+                      f"{cfg['label']} simulation startup incomplete: "
+                      f'{cfg["world"]} process never appeared')
         if nav_ok and not self._nav_up:
             self._log('info',
                       f"{cfg['label']} Nav2/map stack fully online "
@@ -1307,7 +1435,12 @@ class MissionControlGUI(QMainWindow):
 
         self._set_dim(self.btn_launch_sim, False)
         self._set_dim(self.btn_activate_nav, not sim_up)
-        self._set_dim(self.btn_set_initial_pose, not nav_up)
+        # Re-anchoring the pose is forbidden while a mission is actively
+        # running (NAVIGATING) or paused (PAUSED): the map->odom transform must
+        # not jump under a live mission.
+        anchor_ok = (nav_up
+                     and self._status_state not in ('NAVIGATING', 'PAUSED'))
+        self._set_dim(self.btn_set_initial_pose, not anchor_ok)
 
         self._set_dim(self.mode_combo, not dispatch_ready)
         self._set_dim(self.poi_combo, not dispatch_ready)
@@ -1335,15 +1468,17 @@ class MissionControlGUI(QMainWindow):
             self._set_dim(btn, not on)
 
     def _update_pose_inputs(self):
-        """Coordinate/spin area: usable only once the dispatch stage is ready,
-        and only in Single Goal + Custom, or in Waypoint mode (where the same
-        box is how waypoints are composed)."""
+        """Coordinate/spin area: usable once the dispatch stage is ready. In
+        Waypoint mode (and Custom single goal) they look fully active; with a
+        preset POI selected the box stays greyed-looking but remains editable,
+        so keying or arrow-adjusting a new value simply makes the POI intent
+        Custom."""
         ready = self._pose_set and self._nav_up and self._exec_up
         wp_mode = self.mode_combo.currentIndex() == 1
-        enable = ready and (self._custom_selected or wp_mode)
+        greyed = ready and not wp_mode and not self._custom_selected
         for spin in (self.spin_x, self.spin_y, self.spin_yaw):
-            spin.setEnabled(enable)
-            self._set_dim(spin, not enable)
+            spin.setEnabled(ready)
+            self._set_dim(spin, not ready or greyed)
 
     def _refresh_status_wp(self, current=None):
         """Waypoint line: reflect the tracker count (N) in Waypoint mode and
@@ -1442,6 +1577,19 @@ class MissionControlGUI(QMainWindow):
             return False
         return self._active_plan_differs()
 
+    def _already_at(self, goal_pose):
+        """True when the robot's current estimate is already within tolerance
+        of the given goal pose (distance + heading), so dispatching a
+        go-to-pose mission to that spot would just be a no-op drive/spin."""
+        if self._last_estimate_pose is None:
+            return False
+        ex, ey, eyaw = self._last_estimate_pose
+        gx = goal_pose.pose.position.x
+        gy = goal_pose.pose.position.y
+        gyaw = _quat_to_yaw(goal_pose.pose.orientation)
+        return (math.hypot(gx - ex, gy - ey) <= ALREADY_AT_DISTANCE
+                and abs(gyaw - eyaw) <= ALREADY_AT_YAW_TOL)
+
     def _waypoint_edit_blocked(self):
         """Waypoint editing is greyed out while a waypoint mission is driving;
         it reopens when the run is paused (so waypoints can be changed and
@@ -1478,23 +1626,43 @@ class MissionControlGUI(QMainWindow):
                       f'(pids {sorted(pids)}) before switching environment')
             _kill_pids(pids)
 
+    def _begin_launch(self):
+        """Debounce the launch buttons: while a launch is in flight, ignore
+        further presses so a double-click cannot spawn a second, colliding
+        stack before the first one's processes are visible."""
+        if self._launch_in_flight:
+            return False
+        self._launch_in_flight = True
+        QTimer.singleShot(LAUNCH_DEBOUNCE_MS, self._end_launch)
+        return True
+
+    def _end_launch(self):
+        self._launch_in_flight = False
+
     def _on_launch_sim(self):
         cfg = ENVS[self._env_key]
-        running = _pids_matching(_SIM_MARKERS[self._env_key])
-        if running:
-            self._log('warn', f"{cfg['label']} simulation is already running "
-                              f'(pids {sorted(running)}) - not launching a duplicate')
+        if not self._begin_launch():
+            self._log('warn', f"{cfg['label']} launch already in progress - "
+                              'ignoring second press')
             return
-        self._stop_other_env_stack()
+        leftovers = self._full_stack_pids()
+        if leftovers:
+            self._log('warn',
+                      f'Leftover stack processes found before launching '
+                      f"{cfg['label']} ({sorted(leftovers)}) - stopping them "
+                      'first, then starting a fresh world')
+            _kill_pids(leftovers)
+        self._sim_launch_requested = True
+        self._sim_fault_logged = False
+        self._clear_error()
         self._run_launch(cfg['sim_launch'], args={'gui': 'true'})
         self._log('system', f"Launched simulation: {cfg['label']} ({cfg['sim_launch']})")
 
     def _on_activate_nav(self):
         cfg = ENVS[self._env_key]
-        running = _pids_matching(_NAV_MARKERS[self._env_key])
-        if running:
-            self._log('warn', f"{cfg['label']} Nav2/map stack is already running "
-                              f'(pids {sorted(running)}) - not launching a duplicate')
+        if not self._begin_launch():
+            self._log('warn', f"{cfg['label']} Nav2 launch already in progress - "
+                              'ignoring second press')
             return
         self._stop_other_env_stack()
         sim_pids = _pids_matching(_SIM_MARKERS[self._env_key])
@@ -1516,6 +1684,18 @@ class MissionControlGUI(QMainWindow):
                 f'Switch to that environment or stop it before activating '
                 f'{cfg["label"]} Nav2.')
             return
+        nav_leftovers = set()
+        nav_leftovers.update(_pids_matching(_NAV_MARKERS[self._env_key]))
+        for needles in _STACK_NAV_ORPHAN_MARKERS:
+            nav_leftovers.update(_pids_matching(needles))
+        nav_leftovers.update(_pids_matching(_RVIZ_MARKER))
+        if nav_leftovers:
+            self._log('warn',
+                      f'Leftover nav/map processes found '
+                      f'({sorted(nav_leftovers)}) - stopping them first, then '
+                      'starting a fresh Nav2 stack')
+            _kill_pids(nav_leftovers)
+        self._clear_error()
         self._nav_launch_requested = True
         self._nav_fault_logged = False
         self._run_launch(cfg['nav_launch'], args={'launch_sim': 'false', 'gui': 'true'})
@@ -1537,7 +1717,6 @@ class MissionControlGUI(QMainWindow):
 
     def _on_set_initial_pose(self):
         cfg = ENVS[self._env_key]
-        x, y, yaw = cfg['initial_pose']
         if not _pids_matching(_SIM_MARKERS[self._env_key]):
             self._show_error(
                 f'{cfg["label"]} is not running yet. Press "Launch Map" '
@@ -1548,13 +1727,35 @@ class MissionControlGUI(QMainWindow):
                 f'Nav2 is not active for {cfg["label"]}. Press "Load Map + '
                 'Nav" before setting the initial pose.', [self.btn_activate_nav])
             return
-        if self._pose_set:
-            QMessageBox.information(
-                self, 'Already localised',
-                f'The robot is already localised at the map initial pose '
-                f'({x:.2f}, {y:.2f}, {yaw:.2f} rad).\n\n'
-                'Pose remains valid until the simulation is restarted.')
+        if self._status_state in ('NAVIGATING', 'PAUSED'):
+            self._show_error(
+                f'Cannot re-anchor the pose while a mission is '
+                f'{self._status_state.lower()}. Wait for it to finish or '
+                'press "Cancel Goal" first.',
+                [self.btn_cancel])
             return
+        # True robot pose straight from Gazebo (world frame), converted into
+        # the map frame via the known spawn offset. If that stream is not
+        # available yet, fall back to the current localization estimate (so
+        # re-anchoring can never jump the pose to a fixed spawn mid-session),
+        # and only as a last resort to the deterministic spawn constant.
+        live = self._gazebo_pose.get(self._env_key)
+        if live is not None:
+            wx, wy, wyaw = live
+            sx, sy, _ = cfg['spawn']
+            x, y, yaw = wx - sx, wy - sy, wyaw
+            src = 'live Gazebo pose'
+        elif self._last_estimate_pose is not None:
+            x, y, yaw = self._last_estimate_pose
+            src = 'current localization estimate'
+            self._log('warn',
+                      'No live Gazebo pose received - re-anchored on the '
+                      'current localization estimate instead.')
+        else:
+            x, y, yaw = cfg['initial_pose']
+            src = 'spawn constant'
+            self._log('warn',
+                      'No robot pose known yet - seeded the spawn constant.')
         msg = PoseWithCovarianceStamped()
         msg.header.stamp = self._node.get_clock().now().to_msg()
         msg.header.frame_id = 'map'
@@ -1567,9 +1768,11 @@ class MissionControlGUI(QMainWindow):
         msg.pose.covariance[35] = 0.06
         self._initialpose_pub.publish(msg)
         self._pose_set = True
+        self._clear_error()
         self._refresh_workflow()
-        self._log('pose', f'Set initial pose (map) -> ({x:.2f}, {y:.2f}, {yaw:.2f}); '
-                          'robot localised, workflow unlocked')
+        self._log('pose',
+                  f'Set initial pose (map) -> ({x:.3f}, {y:.3f}, {yaw:.3f}) '
+                  f'from {src}; robot re-anchored, workflow unlocked')
 
     def _next_mission_id(self):
         self._mission_seq += 1
@@ -1619,6 +1822,20 @@ class MissionControlGUI(QMainWindow):
         if plan is None:
             return
         mode, pose, waypoints = plan
+        if (waypoints is None and self._last_estimate_pose is not None
+                and self._already_at(pose)):
+            gx = pose.pose.position.x
+            gy = pose.pose.position.y
+            gyaw = _quat_to_yaw(pose.pose.orientation)
+            self._log('info', f'Start skipped: robot is already within '
+                              f'{ALREADY_AT_DISTANCE:.2f} m of '
+                              f'({gx:.2f}, {gy:.2f}, {gyaw:.2f})')
+            self._show_error(
+                f'The robot is already at ({gx:.2f}, {gy:.2f}, '
+                f'{gyaw:.2f} rad) - that goal needs no navigation. '
+                'Choose a different destination or heading.',
+                [self.btn_start])
+            return
         mission_id = self._next_mission_id()
         self._tracked_plan = self._capture_plan(mode, pose, waypoints)
         self._publish_mission(NavigationMission.COMMAND_START, mode, mission_id,
@@ -1747,6 +1964,18 @@ class MissionControlGUI(QMainWindow):
                     f'#{self.wp_list.count()} ({lx:.2f}, {ly:.2f}, {lyaw:.2f}). '
                     'Consecutive duplicate waypoints are not allowed.')
                 return
+        if (self.wp_list.count() == 0 and self._last_estimate_pose is not None):
+            ex, ey, _eyaw = self._last_estimate_pose
+            if math.hypot(x - ex, y - ey) <= ALREADY_AT_DISTANCE:
+                self._log('warn', f'Waypoint #1 rejected: the robot is already '
+                                  f'at ({ex:.2f}, {ey:.2f}) - a route cannot '
+                                  'start from where the robot is standing')
+                self._show_error(
+                    f'Waypoint rejected: the robot is already at '
+                    f'({ex:.2f}, {ey:.2f}). Start the route somewhere the '
+                    'robot is not already standing.')
+                return
+        self._clear_error()
         name = self._match_poi(x, y)
         self.wp_list.addItem(self._wp_label(self.wp_list.count(), x, y, yaw, name))
         item = self.wp_list.item(self.wp_list.count() - 1)
@@ -1824,6 +2053,7 @@ class MissionControlGUI(QMainWindow):
         if self._waypoint_edit_blocked():
             return
         self.wp_list.clear()
+        self._clear_error()
         self._refresh_lamps()
         self._refresh_status_wp()
         self._refresh_workflow()
@@ -1832,10 +2062,16 @@ class MissionControlGUI(QMainWindow):
     def _on_event(self, msg):
         name = EVENT_NAMES.get(msg.event_type, f'EVENT_{msg.event_type}')
         color = EVENT_COLORS.get(msg.event_type, QColor(255, 255, 255))
-        if msg.event_type in (NavigationEvent.EVENT_GOAL_COMPLETED,
-                              NavigationEvent.EVENT_GOAL_CANCELED,
-                              NavigationEvent.EVENT_GOAL_ABORTED,
-                              NavigationEvent.EVENT_GOAL_REJECTED):
+        if (msg.event_type in (NavigationEvent.EVENT_GOAL_COMPLETED,
+                               NavigationEvent.EVENT_GOAL_CANCELED,
+                               NavigationEvent.EVENT_GOAL_ABORTED,
+                               NavigationEvent.EVENT_GOAL_REJECTED)
+                and (self._tracked_mission is None
+                     or msg.mission_id == self._tracked_mission)):
+            # Only a terminal event for the mission currently being tracked ends
+            # it. A canceled/aborted event for an older mission (e.g. the cancel
+            # the coordinator emits when a REPLACE supersedes the active goal)
+            # must not wipe the tracking of the mission that replaced it.
             self._wipe_wp_progress()
             self._tracked_mission = None
             self._tracked_plan = None
@@ -1924,6 +2160,9 @@ class MissionControlGUI(QMainWindow):
         self.status_state.setStyleSheet(f'font-weight:bold;font-size:18px;color:{color};')
         self._apply_banner(state)
         self.status_mission.setText(f'mission: {msg.mission_id}')
+        p = msg.current_pose.pose
+        self._last_estimate_pose = (
+            p.position.x, p.position.y, _quat_to_yaw(p.orientation))
         self._refresh_status_wp(msg.current_waypoint)
         if state in ('COMPLETED', 'CANCELED', 'ABORTED', 'REJECTED'):
             self.status_dist.setText('remaining: 0.00 m')
@@ -1997,9 +2236,10 @@ class MissionControlGUI(QMainWindow):
         self._log('warn', f'Stopping {label} (pids {sorted(pids)})')
         _kill_pids(pids)
 
-    def _cleanup_all(self):
-        """Kill every ms04 stack process we know about: sims, bridges, relays,
-        nav nodes, lifecycle managers, coordinators, rviz and launch parents."""
+    def _full_stack_pids(self):
+        """Every ms04 stack process we know about, across both environments:
+        sims, bridges, relays, nav nodes, lifecycle managers, coordinators,
+        rviz and launch parents."""
         pids = set()
         for key in ENVS:
             pids.update(_pids_matching(_SIM_MARKERS[key]))
@@ -2007,6 +2247,12 @@ class MissionControlGUI(QMainWindow):
         pids.update(_pids_matching(_RVIZ_MARKER))
         for needles in _STACK_MARKERS:
             pids.update(_pids_matching(needles))
+        return pids
+
+    def _cleanup_all(self):
+        """Kill every ms04 stack process we know about: sims, bridges, relays,
+        nav nodes, lifecycle managers, coordinators, rviz and launch parents."""
+        pids = self._full_stack_pids()
         if pids:
             self._log('warn', f'Stopping stack (pids {sorted(pids)})')
             _kill_pids(pids)

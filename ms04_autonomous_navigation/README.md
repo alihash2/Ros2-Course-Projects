@@ -85,7 +85,7 @@ Inside the GUI, the button flow is the **only** flow you need:
 |------|--------|--------------|
 | 1 | **Launch Map** | Gazebo opens with the selected world (Office by default) and RViz |
 | 2 | **Load Map + Nav** | Nav2 servers + AMCL localization + map + coordinator start |
-| 3 | **Set Initial Pose** | Robot is placed at the environment's configured spawn on `/initialpose` |
+| 3 | **Set Initial Pose** | Robot's live pose from Gazebo is published on `/initialpose` → AMCL re-anchors, robot appears localized in RViz |
 | 4 | Pick a goal → **Start Mission** | Robot navigates; every event appears in the live log |
 
 No `ros2 topic` commands are ever required during testing — the buttons
@@ -112,21 +112,47 @@ watches the actual `ros2` processes every 2 s):
   instead of sending a command the coordinator would ignore. Pause/Resume/Cancel
   additionally verify the mission state (`NAVIGATING`/`PAUSED`) and refuse an
   irrelevant command the same way.
+- **Launch Map and Load Map + Nav clean up leftovers before starting.** Each
+  press scans for any leftover ms04 stack processes (stale sims, orphaned
+  bridges/coordinators, old rviz, nav2, lifecycle managers) and stops them first,
+  then launches a fresh stack — an accidental duplicate click or a crashed stack
+  restarts cleanly instead of piling orphans on top of each other. Load Map + Nav
+  stops only the navigation tier and deliberately keeps a healthy running sim
+  alive. The two launch buttons are also **debounced**: a second press inside
+  6 s of the first is ignored, so a rapid double-click cannot spawn a colliding
+  second stack while the first is still starting. If **Launch Map** is pressed
+  but the world process never appears (the launch parent died mid-startup), the
+  red bar reports the failed simulation and asks you to press **Launch Map**
+  again — just like the Nav2 startup check. A second GUI instance is warned
+  about on startup, since two GUIs would fight over the same stack.
 - Pressing **Set Initial Pose** before it is allowed (Map not up, or Map+Nav
-  not fully online) is blocked; pressing it again after it is set shows an
-  "Already localised" dialog instead of re-publishing.
+  not fully online) is blocked with the red bar. When it is allowed, the button
+  publishes the robot's **true live pose** (queried straight from Gazebo every
+  press) instead of a fixed constant, so a re-press is always safe and
+  re-anchors AMCL exactly where the robot is — no drift, no shift. Re-seeding
+  is **blocked while a mission is running or paused** (red bar, button greyed)
+  because the map→odom transform must not jump under a live mission.
+- **Starting a mission still requires the pose to have been set once** — goal
+  dispatch stays locked until the robot is localized (`_pose_set`), even though
+  AMCL auto-seeds on startup; the pressed pose is just re-anchored live.
 - **Waypoint mode** refuses *consecutive duplicate* waypoints (same point
   within 0.5 m and same heading), and the coordinate boxes stay editable in
   waypoint mode so you can compose each waypoint before adding it.
 - Switching the **Environment** clears all waypoints and resets the initial pose
-  so the previous world's plan can never leak into the new one.
-- In **Single Goal** mode the coordinate boxes are read-only unless **Custom
-  (type coords below)** is selected in the POI dropdown, and the Mission Status
-  waypoint line reads `waypoint: 1/1` (a single goal has no waypoint list).
-- **POI and typed coordinates are one unified input**: typing X/Y/X again over
-  an existing POI auto-selects that POI and snaps the boxes to its exact values;
-  a pose that matches no POI (within 0.5 m) falls back to **Custom**. Picking a
-  preset POI snaps the coordinate boxes to it accordingly.
+  so the previous world's plan can never leak into the new one. It is **blocked
+  while a mission is `NAVIGATING` or `PAUSED`** (red bar naming **Cancel Goal**),
+  because the map frame differs per environment and a live mission cannot jump
+  across it; finish or cancel the mission first.
+- In **Single Goal** mode the coordinate boxes stay **greyed out while a preset
+  POI is selected, but remain editable**: clicking the box or nudging the up/down
+  arrows lets you type a new value, and the moment any coordinate changes the POI
+  intent instantly switches to **Custom** (keeping your value, never snapping
+  back). The Mission Status waypoint line reads `waypoint: 1/1` (a single goal
+  has no waypoint list).
+- **POI and typed coordinates are one unified input**: typing X/Y/Theta over an
+  existing POI in Custom mode auto-selects that POI and snaps the boxes to its
+  exact values (only from an already-Custom selection); a preset being edited
+  always becomes Custom. Picking a preset POI snaps the coordinate boxes to it.
 - **Start Mission is blocked while a mission is active** — while
   `NAVIGATING`/`PAUSED`/… the button is greyed out; pressing it shows a red bar
   (and pulses **Replace Goal**) instead of publishing a command the coordinator
@@ -241,7 +267,7 @@ paused / completed / failed) as a visual cue.
 |---|---|---|
 | World size | 16 × 14 m | 20 × 18 m |
 | Robot spawn (world) | `(0.0, 0.0, 0.0)` | `(-6.0, 0.0, 0.0)` |
-| GUI "Set Initial Pose" | `(0.0, 0.0, 0.0)` | `(0.0, 0.0, 0.0)` |
+| "Set Initial Pose" | publishes the robot's **live Gazebo pose** (world→map via the spawn offset) — never a fixed spawn | |
 | Default map | `maps/office_map.yaml` | `maps/warehouse_map.yaml` |
 
 **Office POIs** (from the GUI dropdown):
@@ -266,7 +292,7 @@ paused / completed / failed) as a visual cue.
 | Rack A (North) | (5.0, 6.0, 0.0) |
 | Rack B (South) | (5.0, -6.0, 0.0) |
 
-You can also type raw X / Y / Theta — any typed pose within `POI_MATCH_TOLERANCE` (0.5 m) of a predefined POI is auto-labelled with the POI name in the waypoint list, and the POI dropdown follows live as you type (matching → that POI selected with snapped values; otherwise → **Custom**).
+You can also type raw X / Y / Theta — any typed pose within `POI_MATCH_TOLERANCE` (0.5 m) of a predefined POI is auto-labelled with the POI name in the waypoint list, and the POI dropdown follows live as you type (from a Custom selection, matching → that POI selected with snapped values; editing a preset → always **Custom**). In Single Goal mode preset POI coordinates are greyed but editable — changing a value drops the preset to Custom.
 
 ---
 

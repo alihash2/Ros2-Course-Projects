@@ -73,6 +73,16 @@ def generate_launch_description():
         output='screen',
     )
 
+    # True robot pose straight from Gazebo (world frame), used by the GUI to
+    # re-anchor AMCL on where the robot really is.
+    model_pose_bridge_cmd = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        arguments=['/world/office_world/dynamic_pose/info@'
+                   'geometry_msgs/msg/PoseArray[gz.msgs.Pose_V'],
+        output='screen',
+    )
+
     # Spawn TurtleBot3 — custom model with the lidar max range extended to
     # 8.0 m (RPLIDAR A2M8-class, the standard replacement lidar for this class
     # of indoor SLAM robot; stock LDS-02 only reaches 3.5 m).
@@ -110,6 +120,7 @@ def generate_launch_description():
     ld.add_action(gzserver_cmd)
     ld.add_action(gzclient_cmd)
     ld.add_action(ros_gz_bridge_cmd)
+    ld.add_action(model_pose_bridge_cmd)
     ld.add_action(robot_state_publisher_cmd)
     ld.add_action(spawn_turtlebot_cmd)
     ld.add_action(cmd_vel_relay_node)
