@@ -463,6 +463,21 @@ void NavigationCoordinatorNode::follow_result(const FollowWaypointsHandle::Wrapp
 
     cancel_reason_ = CancelReason::NONE;
     if (result.code == rclcpp_action::ResultCode::SUCCEEDED) {
+        // Nav2's FollowWaypoints keeps marching through waypoints even when a
+        // waypoint could not actually be reached (after its recoveries give
+        // up it records the waypoint as missed and moves on). Reporting that
+        // as a clean COMPLETED would claim the robot "achieved" waypoints it
+        // never reached while physically stuck, so surface it as an ABORTED
+        // partial mission instead.
+        if (!result.result->missed_waypoints.empty()) {
+            std::string reason = "waypoint mission completed with "
+                + std::to_string(result.result->missed_waypoints.size())
+                + " waypoint(s) never reached (robot stuck/blocked): mission "
+                + "reported as aborted";
+            publish_status(MissionState::ABORTED, reason);
+            finish_mission(NavigationEvent::EVENT_GOAL_ABORTED, false, reason);
+            return;
+        }
         publish_status(MissionState::COMPLETED, "waypoint mission completed");
         finish_mission(NavigationEvent::EVENT_GOAL_COMPLETED, true, "waypoint mission completed");
     } else if (result.code == rclcpp_action::ResultCode::ABORTED) {

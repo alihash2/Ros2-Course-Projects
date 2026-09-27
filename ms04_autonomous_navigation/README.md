@@ -149,10 +149,27 @@ watches the actual `ros2` processes every 2 s):
   intent instantly switches to **Custom** (keeping your value, never snapping
   back). The Mission Status waypoint line reads `waypoint: 1/1` (a single goal
   has no waypoint list).
-- **POI and typed coordinates are one unified input**: typing X/Y/Theta over an
-  existing POI in Custom mode auto-selects that POI and snaps the boxes to its
-  exact values (only from an already-Custom selection); a preset being edited
-  always becomes Custom. Picking a preset POI snaps the coordinate boxes to it.
+- **Add / Remove / Clear while in Single Goal mode show a popup instead of
+  acting** on the waypoint list: the red bar explains that you are in **Single
+  Goal** mode, tells you to select a POI or enter custom X/Y/Theta coordinates
+  and press **Start Mission**, and pulses **Start Mission** — those buttons only
+  build a waypoint route, so in Single Goal mode they are meaningless (and they
+  are no-ops rather than silently editing a route you are not in).
+- **POI and typed coordinates are one unified input**: picking a preset POI
+  snaps the coordinate boxes to it. Editing any box never lets a preset snap
+  the pose back — the intent immediately becomes **Custom** and your typed
+  values are kept. The auto-select check runs **only once you have finished
+  editing** (focus leaves a field): if the pose then matches a predefined POI
+  **exactly** — X, Y *and* heading, to the 2-decimal display precision — that
+  POI is auto-selected and the boxes snap to its canonical values; any near
+  miss (e.g. a heading of 3.19 vs. a POI's π) stays Custom with your numbers
+  untouched.
+- **The coordinate fields accept any value** (no map bounds, e.g. the spin boxes
+  range up to ±10000 in X/Y and heading), and the Custom entry reads
+  **Custom (type coords above)** since the boxes sit above the POI list. A
+  waypoint entered from Custom is always labelled `custom coords (x, y, θ)` in
+  the tracker — the name of a predefined POI appears only when that POI is the
+  one actually selected (never just "the last POI you picked").
 - **Start Mission is blocked while a mission is active** — while
   `NAVIGATING`/`PAUSED`/… the button is greyed out; pressing it shows a red bar
   (and pulses **Replace Goal**) instead of publishing a command the coordinator
@@ -163,13 +180,61 @@ watches the actual `ros2` processes every 2 s):
   an unchanged plan → red bar telling you to change the goal/waypoints. The
   current mission is remembered automatically so an identical guess can't be
   re-sent.
-- **The waypoint adder/greys while a waypoint mission drives**: Add / Remove /
-  Clear are greyed out during `NAVIGATING`; once the mission is **paused** they
-  unlock so you can build a new route before pressing **Replace Goal** (adding
-  waypoints while driving is blocked with a "Pause it" red bar).
+- **The waypoint tracker is editable even while a waypoint mission drives**:
+  Add / Remove / Clear stay **open** during `NAVIGATING` (and are fully
+  unlocked while paused), so you can draft a replacement route while the robot
+  keeps executing the *old* plan. The Loaded lamp is what flags the draft: it
+  goes dark the moment the list diverges from the running plan and relights
+  only when the list matches it again (see the lamps bullet below). Only
+  **Replace Goal** (which still requires `PAUSED` first) actually swaps the
+  new route in.
+- **The status lamps each mean exactly one thing**: **Loaded = route-sync** —
+  lit only while a waypoint mission is running/paused *and* the waypoint list
+  in the tracker exactly matches the plan the robot is executing; **Progress**
+  = driving it; **Paused** = stopped mid-plan; **Reached** = mission
+  completed. Hovering over the **Loaded** dot or label pops a tooltip that (in
+  the divergent case) tells you the new waypoints are **unapplied** and to
+  **press Pause, then Replace Goal** to begin executing the new list.
+- **Waypoint editing prompts for the initial pose just like dispatching** —
+  Add / Remove / Clear (and **double-clicking the waypoint list** to add the
+  current selection) run through the same staged readiness gate, so trying to
+  plan a route before the pose is set raises the red bar naming **Set Initial
+  Pose** instead of silently letting you build a plan you cannot run.
+- **Clicking any goal-dispatcher input also walks you through startup**: the
+  X / Y / Theta boxes and the POI selector (and the Add / Remove / Clear
+  buttons) raise the same red bar + glowing button as the executor controls —
+  **Launch Map → Load Map + Nav → Set Initial Pose** — so the first thing you
+  touch on the goal form tells you exactly which button to press next, in
+  order, to reach a dispatchable state.
+- **The pending selection is signalled**: whenever the selected POI/coordinates
+  differ from the latest waypoint in the tracker (i.e. Add would accept them),
+  the **Add as Waypoint** button glows and the POI + X/Y/Theta text turns red;
+  both indicators go neutral once the selection matches the last entry.
+- **In Waypoint mode, picking a preset POI appends it immediately** — one click
+  is one waypoint, so a pure-POI route needs zero button presses (re-picking a
+  spot that already ends the list is a silent no-op for browsing). The moment
+  you hand-edit any X / Y / θ field, that newest row turns into a **draft**
+  (amber, *italic*, marked `▸ … (draft)`) that follows the boxes live — an
+  edit-in-place heading tweak fixes the row instead of spawning a near-duplicate.
+  The draft freezes into a real waypoint on any commit gesture: **Add as
+  Waypoint**, **Enter** (or finishing the edit), **clicking another POI**, or
+  **Start Mission**; the consecutive-duplicate rule still guards the row it
+  resumes. Editing again *after* a commit starts composing the **next** entry
+  (Add glows), not silently amending the row you already locked in.
 - **Replacing / switching env resets the remembered plan**: after a successful
   Replace (or mission end, or env switch) the remembered running plan is cleared,
   so the next Replace press is gated on a genuinely new plan.
+- **A waypoint mission that never reached some waypoints is reported as
+  ABORTED, not COMPLETED**: Nav2's follow_waypoints keeps marching on even when
+  a waypoint cannot be reached (it records it as missed). The coordinator now
+  surfaces "N waypoint(s) never reached (robot stuck/blocked)" as an aborted
+  partial mission instead of claiming every waypoint was achieved.
+- **Plain-text run logs are retained for diagnosis**: every fresh launch of the
+  GUI appends its full log to `~/.ros/ms04_mission_control/runs/run_*.log`, and
+  only the newest **5 runs** are kept (a fresh launch prunes the oldest to make
+  room). Set `MS04_MISSION_CONTROL_LOG_DIR` to redirect the directory. These
+  files survive on disk so any user or agent can read what happened across the
+  last sessions.
 
 ---
 
@@ -190,7 +255,9 @@ ros2 run ms04_autonomous_navigation mission_control_gui
 2. Press **Launch Map**. Wait for the log to show `Launched simulation: Office (office_simulation.launch.py)` and for Gazebo + RViz to open with the Waffle in the office world.
 3. Press **Load Map + Nav** and wait until it is fully online (the log shows it as active; waypoint/goal stages unlock only then).
 4. Press **Set Initial Pose**. The robot appears localized in RViz (green scan lines on the map).
-5. Set Mode = **Waypoints**. From the **POI** dropdown add these three stops with **Add as Waypoint**:
+5. Set Mode = **Waypoints**. Add these three stops by picking each POI from the
+   dropdown — **one click appends one waypoint** (no button press needed), or
+   use **Add as Waypoint** for typed coordinates:
    - `NW Conference`
    - `SE Breakroom`
    - `Corridor Center`
