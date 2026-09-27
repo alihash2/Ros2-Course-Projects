@@ -76,7 +76,7 @@ colcon build --packages-select ms04_autonomous_navigation
 source install/setup.bash
 
 export TURTLEBOT3_MODEL=waffle
-ros2 run ms04_autonomous_navigation mission_control_gui
+ros2 run ms04_autonomous_navigation mission_control_gui.py
 ```
 
 Inside the GUI, the button flow is the **only** flow you need:
