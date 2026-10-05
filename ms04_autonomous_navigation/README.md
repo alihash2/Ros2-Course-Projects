@@ -184,3 +184,23 @@ GUI starts. Later starts are quick.
 
 **Changed the code but see no difference**
 Rebuild the image: `sudo docker compose build && sudo docker compose up`.
+
+**The GUI opens but the buttons do nothing**
+The simulation takes a few seconds to start. Wait for the log line confirming
+the environment launched before pressing the next button.
+
+**`Load Map + Nav` says no simulation detected**
+That button attaches to an already-running simulation — start the environment
+first.
+
+**Stale Gazebo processes or port conflicts**
+Usually caused by switching environments while another one is still running.
+Clear them with:
+
+```bash
+pkill -f 'gazebo|ros2 launch ms04'
+```
+
+**Communication problems between machines or over a VPN**
+Set the same `ROS_DOMAIN_ID` in every terminal (or `export ROS_LOCALHOST_ONLY=1`)
+and check with `ros2 node list`.
