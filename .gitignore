@@ -2,3 +2,9 @@
 .git/
 __pycache__/
 *.pyc
+
+# Timestamped SLAM map snapshots written by auto_slam_explorer.py
+# (maps/<env>_map_YYYYMMDD_HHMMSS.{pgm,yaml,cfg}) and intermediate *_slam.*
+# The canonical maps (office_map.*, warehouse_map.*) stay tracked.
+*_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9].*
+*_slam.*
