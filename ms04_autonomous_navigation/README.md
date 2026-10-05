@@ -23,15 +23,137 @@ ROS 2 (Jazzy) package implementing **autonomous navigation for a TurtleBot3 Waff
 
 - **OS:** Ubuntu 24.04 LTS
 - **ROS 2:** Jazzy
-- **Simulation/navigation deps + PyQt5:**
+
+### 2.0 One-time: add the ROS 2 apt repository
+
+**Skip this if `ros2 --help` already works** (ROS 2 Jazzy is installed). On a
+fresh Ubuntu box the `ros-jazzy-*` packages live in `packages.ros.org`, which is
+*not* configured by default — without this step every `apt install
+ros-jazzy-…` below fails with `E: Unable to locate package ros-jazzy-…`.
+
+```bash
+sudo apt update
+sudo apt install -y curl gnupg lsb-release software-properties-common
+sudo add-apt-repository -y universe
+
+# trusted key (fingerprint C1CF6E31E6BADE8868B172B4F42ED6FBAB17C654)
+sudo curl -fsSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+  -o /usr/share/keyrings/ros-archive-keyring.gpg
+
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
+http://packages.ros.org/ros2/ubuntu noble main" | sudo tee /etc/apt/sources.list.d/ros2.list
+
+sudo apt update
+```
+
+Then install ROS 2 Jazzy itself if it is not there yet:
+
+```bash
+sudo apt install -y ros-jazzy-ros-base ros-jazzy-ros2cli ros-jazzy-launch-ros
+source /opt/ros/jazzy/setup.bash
+```
+
+### Install every dependency
+
+Build tooling, the `rosidl` interface-generation dependencies (**`empy`** +
+**`lark`**), the GUI toolkit and the simulation/navigation stack — one block:
 
 ```bash
 sudo apt update
 sudo apt install -y \
+    python3-colcon-common-extensions \
+    python3-empy \
+    python3-lark \
     python3-pyqt5 \
-    ros-$ROS_DISTRO-turtlebot3-gazebo \
-    ros-$ROS_DISTRO-slam-toolbox \
-    ros-$ROS_DISTRO-nav2-bringup
+    ros-jazzy-nav2-bringup \
+    ros-jazzy-nav2-amcl \
+    ros-jazzy-nav2-map-server \
+    ros-jazzy-nav2-lifecycle-manager \
+    ros-jazzy-nav2-waypoint-follower \
+    ros-jazzy-ros-gz-bridge \
+    ros-jazzy-ros-gz-sim \
+    ros-jazzy-rviz2 \
+    ros-jazzy-slam-toolbox \
+    ros-jazzy-turtlebot3-gazebo \
+    ros-jazzy-xacro
+```
+
+> The `ros-jazzy-*` names are spelled out on purpose. Do **not** write
+> `ros-$ROS_DISTRO-…` here: at this point in setup nothing has sourced
+> `/opt/ros/jazzy/setup.bash`, so `$ROS_DISTRO` is empty and the command
+> silently degrades to `ros--nav2-bringup` → `E: Unable to locate package`.
+
+> **`python3-empy` is mandatory** — the package ships custom
+> `msg/` + `action/` interfaces, and `rosidl_generate_interfaces` (CMakeLists
+> step `Generate custom interfaces`) runs empy during `colcon build`. Verified
+> failure mode without it:
+> `ImportError: No module named 'em' — The Python package 'empy' must be installed`.
+>
+> **`python3-lark` is mandatory too** — `rosidl_parser` (which parses the
+> `.msg`/`.action` files) does `from lark import Lark`. Verified failure mode:
+> `ImportError: cannot import name 'Lark' from 'lark'`.
+
+### 2.1 If apt is not an option — install the build deps with pip
+
+`empy` and `lark` are the **only** two Python packages this package needs that
+`apt` may not provide on a locked-down machine, and they are the two that break
+the build. Install them straight from PyPI:
+
+```bash
+# pip needs the venv module on a bare Ubuntu 24.04
+sudo apt update && sudo apt install -y python3-venv python3-pip
+
+# Option A (recommended): a dedicated venv, no system pollution
+python3 -m venv ~/ms04-venv
+source ~/ms04-venv/bin/activate
+pip install --upgrade pip
+pip install empy lark
+
+# Make it visible to every ROS/colcon build (put this AFTER
+# "source /opt/ros/jazzy/setup.bash" so it wins over dist-packages)
+export PYTHONPATH="$HOME/ms04-venv/lib/python3.12/site-packages:$PYTHONPATH"
+
+# Option B: straight into the system interpreter
+# Ubuntu 24.04 is PEP-668 "externally managed", so --break-system-packages
+# is required. Only use this if you have no venv.
+sudo pip install --break-system-packages empy lark
+```
+
+Then **always** verify, in the same shell you build from:
+
+```bash
+python3 -c "import em, lark; print('empy', em.__version__, '/ lark', lark.__version__)"
+```
+
+> Both paths are verified to work: `apt`'s `python3-empy` 3.3.4 +
+> `python3-lark` 1.1.9, and pip's `empy` 4.2.1 + `lark` 1.3.1 build this
+> package cleanly. ROS itself imports the module as `em`, but the **PyPI
+> distribution name is `empy`** — `pip install em` does not exist.
+
+<details>
+<summary>Alternative: let <code>rosdep</code> resolve everything from <code>package.xml</code></summary>
+
+```bash
+sudo apt update && sudo apt install -y python3-colcon-common-extensions python3-rosdep
+rosdep init                 # only once per machine
+rosdep update
+cd ~/ros2_ws
+rosdep install --from-paths src --ignore-src -r -y
+```
+
+> **`rosdep` alone is not sufficient.** No rosdep rule publishes the `lark`
+> key for this distro, and `rosdep` skips any package that an existing ROS
+> install already provides. Always run the `apt` block in §2 as well (or the
+> `pip` block in §2.1) — rosdep is a helpful cross-check, not a replacement.
+> `rosdep init` must have been run at least once or the command aborts with
+> *"your rosdep installation has not been initialized yet"*.
+
+</details>
+
+**Verify the build-critical pieces are present:**
+
+```bash
+python3 -c "import em, lark; print('empy/lark OK')"
 ```
 
 - **Environment variable** (must be set in every terminal and added to `~/.bashrc`):
@@ -53,8 +175,15 @@ mkdir -p ~/ros2_ws/src
 cd ~/ros2_ws/src
 git clone https://github.com/alihash2/Ros2-Course-Projects.git
 
-# 2. Build the package
+# 2. Install every declared dependency (empy, PyQt5, nav2, slam_toolbox, ...)
+#    from the package.xml — skipped steps if already installed
 cd ~/ros2_ws
+sudo apt update && sudo apt install -y python3-rosdep
+rosdep init        # once per machine
+rosdep update
+rosdep install --from-paths src --ignore-src -r -y
+
+# 3. Build the package
 colcon build --packages-select ms04_autonomous_navigation
 source install/setup.bash
 ```
@@ -466,6 +595,30 @@ unreachable slivers, not timeout artifacts.
 ---
 
 ## 16. Troubleshooting
+
+### Build fails on empy / lark (`No module named 'em'`, `cannot import name 'Lark'`)
+
+`rosidl_generate_interfaces` needs **both** Python packages. Install them and
+rebuild:
+
+```bash
+# easiest: apt (versions validated against ROS 2 Jazzy)
+sudo apt install -y python3-empy python3-lark
+
+# or from PyPI if apt has no such package — see §2.1
+pip install empy lark     # + export PYTHONPATH if you used a venv
+
+cd ~/ros2_ws
+rm -rf build install log           # only needed if the build already failed
+colcon build --packages-select ms04_autonomous_navigation
+source install/setup.bash
+```
+
+Confirm what Python actually resolved before rebuilding:
+
+```bash
+python3 -c "import em, lark; print(em.__version__, em.__file__); print(lark.__version__)"
+```
 
 ### GUI launches nothing / buttons do nothing
 
