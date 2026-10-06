@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fast DDS profiles for ms05.
+
+  The data_writer profile named "service" is picked up by rmw_fastrtps for
+  every service RESPONSE writer (rmw_service.cpp loads a profile named
+  "service" when FASTRTPS_DEFAULT_PROFILES_FILE is set).
+
+  It raises reliability max_blocking_time from the 100 ms default to 10 s.
+  rmw_fastrtps's __rmw_send_response() waits that long for the server's
+  response writer to match the client's response reader before it DROPS
+  the response ("failed to send response ... client will not receive
+  response").  Under the discovery storm of Gazebo + 2 robots + Nav2
+  starting together, matching occasionally exceeded 100 ms, which stalled
+  nav2's lifecycle manager mid-bringup.
+
+  Structure validated against /opt/ros/jazzy/share/fastRTPS_profiles.xsd:
+  publisherProfileType takes profile_name as an attribute, no <name> child.
+-->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <data_writer profile_name="service">
+    <qos>
+      <reliability>
+        <kind>RELIABLE</kind>
+        <max_blocking_time>
+          <sec>10</sec>
+          <nanosec>0</nanosec>
+        </max_blocking_time>
+      </reliability>
+    </qos>
+  </data_writer>
+</profiles>
