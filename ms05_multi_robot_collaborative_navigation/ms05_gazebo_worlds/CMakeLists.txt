@@ -27,6 +27,7 @@ install(DIRECTORY
   markers
   tools
   params
+  config
   DESTINATION share/${PROJECT_NAME}
   PATTERN ".gitkeep" EXCLUDE
 )

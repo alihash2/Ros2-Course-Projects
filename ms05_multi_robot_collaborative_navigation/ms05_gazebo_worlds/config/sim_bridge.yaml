@@ -1,0 +1,36 @@
+# Simulator-wide bridge, run once WITHOUT a namespace and WITHOUT
+# expand_gz_topic_names (all names here are absolute, used verbatim):
+#
+#   /clock    sim time for every ROS node (use_sim_time)
+#   /tf       both robots' odom->base transforms, composed into ONE tree:
+#             map -> odom_robot1 -> robot1/base_footprint
+#             map -> odom_robot2 -> robot2/base_footprint
+#             (frames are unique per robot; a shared global /tf is what
+#             makes `ros2 run tf2_tools view_frames` show a single tree)
+#   ground truth pose array: Gazebo's real robot poses for issue 7 to
+#             bootstrap/verify Robot 2's pose (diagnostic channel only -
+#             Robot 2's ongoing localisation comes from QR markers).
+
+- ros_topic_name: "/clock"
+  gz_topic_name: "/clock"
+  ros_type_name: "rosgraph_msgs/msg/Clock"
+  gz_type_name: "gz.msgs.Clock"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/tf"
+  gz_topic_name: "/robot1/tf"
+  ros_type_name: "tf2_msgs/msg/TFMessage"
+  gz_type_name: "gz.msgs.Pose_V"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/tf"
+  gz_topic_name: "/robot2/tf"
+  ros_type_name: "tf2_msgs/msg/TFMessage"
+  gz_type_name: "gz.msgs.Pose_V"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/world/multi_room/dynamic_pose/info"
+  gz_topic_name: "/world/multi_room/dynamic_pose/info"
+  ros_type_name: "geometry_msgs/msg/PoseArray"
+  gz_type_name: "gz.msgs.Pose_V"
+  direction: GZ_TO_ROS

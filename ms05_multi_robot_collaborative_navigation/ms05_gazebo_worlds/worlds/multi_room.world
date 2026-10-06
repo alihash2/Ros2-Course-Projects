@@ -4,7 +4,7 @@
 
   Layout (inner faces, metres):
     outer rectangle  x in [-10, 10], y in [-8, 8], walls 2.5 m high / 0.2 m thick
-    central core     solid block x in [-3, 3], y in [-2.5, 2.5]
+    central core     solid block x in [-2, 2], y in [-2.5, 2.5]
     rooms (4):       01 NW x in [-10, -4.5] y in [3, 8]
                      02 NE x in [4.5, 10]    y in [3, 8]
                      03 SE x in [4.5, 10]    y in [-8, -3]
@@ -152,11 +152,11 @@
         <!-- Central core (solid block around which the corridor loops) -->
         <collision name="core_col">
           <pose>0 0 1.25 0 0 0</pose>
-          <geometry><box><size>6.0 5.0 2.5</size></box></geometry>
+          <geometry><box><size>4.0 5.0 2.5</size></box></geometry>
         </collision>
         <visual name="core_vis">
           <pose>0 0 1.25 0 0 0</pose>
-          <geometry><box><size>6.0 5.0 2.5</size></box></geometry>
+          <geometry><box><size>4.0 5.0 2.5</size></box></geometry>
           <material><ambient>0.62 0.64 0.68 1</ambient><diffuse>0.62 0.64 0.68 1</diffuse></material>
         </visual>
 
