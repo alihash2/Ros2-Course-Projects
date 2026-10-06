@@ -1,0 +1,7 @@
+# Query QR tag records. Called by Robot 2's navigator at
+# /qr_tag_database/query_qr_tag
+int32 marker_id                         # marker id to fetch, -1 = all records
+---
+bool success
+string message
+QrTagRecord[] records

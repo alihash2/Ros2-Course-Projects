@@ -1,0 +1,7 @@
+# Record (or refresh) one QR tag observation in the database.
+# Called by Robot 1's mapper at /qr_tag_database/record_qr_tag
+QrTagRecord record
+---
+bool success
+string message                          # on overwrite: includes original recorded_at
+bool overwrote_existing

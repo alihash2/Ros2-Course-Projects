@@ -17,6 +17,21 @@ find_package(builtin_interfaces REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(ms05_qr_vision REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/QrTagRecord.msg"
+  "srv/RecordQrTag.srv"
+  "srv/QueryQrTag.srv"
+  DEPENDENCIES std_msgs geometry_msgs builtin_interfaces
+)
+ament_export_dependencies(rosidl_default_runtime)
+
+install(PROGRAMS
+  scripts/qr_tag_database_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME qr_tag_database_node
+)
 
 install(DIRECTORY
   launch
