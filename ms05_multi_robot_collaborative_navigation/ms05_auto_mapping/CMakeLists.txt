@@ -21,6 +21,7 @@ find_package(ms05_qr_vision REQUIRED)
 install(DIRECTORY
   launch
   params
+  config
   rviz
   maps
   DESTINATION share/${PROJECT_NAME}
