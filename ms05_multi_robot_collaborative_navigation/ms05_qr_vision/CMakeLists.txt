@@ -11,6 +11,19 @@ find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/QrDetection.msg"
+  DEPENDENCIES std_msgs geometry_msgs
+)
+ament_export_dependencies(rosidl_default_runtime)
+
+install(PROGRAMS
+  scripts/qr_detector_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME qr_detector_node
+)
 
 install(DIRECTORY
   params
