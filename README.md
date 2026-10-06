@@ -13,6 +13,9 @@ A collection of ROS 2 (Jazzy) packages built as course projects, covering everyt
 | `ms03_turtlebot3_control` | `ms03_turtlebot3_control` | Reactive **Behavior Tree** controller for a TurtleBot3 Waffle in Gazebo (`turtlebot3_world`) — LIDAR obstacle detection, turn-in-place recovery, and an interactive goal-sending menu. |
 | `dynamic_obstacle_avoidance` | `dynamic_obstacle_avoidance` | Custom **Nav2 global planner plugins** (A\* and RRT) for the TurtleBot3 in Gazebo, full Nav2 + RViz integration, costmap-validated goals, and a mission-control CLI menu. |
 | `ms04_autonomous_navigation` | `ms04_autonomous_navigation` | **Autonomous navigation** (Nav2) in custom Office/Warehouse Gazebo worlds with a PyQt5 **Mission Control GUI**. The GUI drives simulation, map + Nav2 bringup, initial pose, and goal/waypoint missions entirely from buttons. Includes AMCL localization per env and auto-SLAM mapping. |
+| `ms05_multi_robot_collaborative_navigation/` | `ms05_gazebo_worlds` | **Multi-robot collaborative navigation** — the `ros worlds` code area: multi-room Gazebo world, QR wall markers, dual-robot spawn and Gazebo↔ROS bridges (container: `world`). |
+| | `ms05_qr_vision` | The `computer vision` code area: decodes the QR markers from both robot cameras into tag observations (container: `vision`). |
+| | `ms05_auto_mapping` | The `automapping logic` code area: Robot 1 auto-SLAM mapper with QR registration, Robot 2 QR-based navigator, QR tag database, Nav2 profiles and mission launch (container: `mapping`). |
 
 > Each package folder contains its own detailed `README.md` with prerequisites, build steps, run instructions, and usage examples. **Read the package's README before running it.**
 
@@ -50,13 +53,20 @@ This repo is meant to be cloned **inside** your ROS 2 workspace's `src/` folder.
 │           ├── plugins/            <- pluginlib plugin descriptor
 │           ├── src/                <- planner plugins + CLI menu
 │           └── include/
-│       └── ms04_autonomous_navigation/
-│           ├── launch/             <- per env sim/nav/mapping launches
-│           ├── params/             <- env Nav2 tuning + exploration params
-│           ├── worlds/ maps/       <- Office/Warehouse worlds + saved maps
-│           ├── msg/ action/        <- Navigation* interfaces
-│           ├── scripts/            <- PyQt5 Mission Control GUI
-│           └── src/                <- coordinator node (C++)
+│       ├── ms04_autonomous_navigation/
+│       │   ├── launch/             <- per env sim/nav/mapping launches
+│       │   ├── params/             <- env Nav2 tuning + exploration params
+│       │   ├── worlds/ maps/       <- Office/Warehouse worlds + saved maps
+│       │   ├── msg/ action/        <- Navigation* interfaces
+│       │   ├── scripts/            <- PyQt5 Mission Control GUI
+│       │   └── src/                <- coordinator node (C++)
+│       └── ms05_multi_robot_collaborative_navigation/   <- folder, not a package
+│           ├── README.md           <- layout, boundaries + cross-package contracts
+│           ├── ms05_gazebo_worlds/ <- multi-room world, QR markers, sim + bridges
+│           ├── ms05_qr_vision/     <- QR detection node + QrDetection.msg
+│           ├── ms05_auto_mapping/  <- mapper, navigator, QR db, Nav2 profiles
+│           ├── docker/             <- world / vision / mapping Dockerfiles
+│           └── docker-compose.yml  <- three services, one command
 ├── install/                        <- created by colcon build (not in repo)
 ├── build/                          <- created by colcon build (not in repo)
 └── log/                            <- created by colcon build (not in repo)
@@ -121,7 +131,9 @@ sudo apt install -y \
     ros-$ROS_DISTRO-behaviortree-cpp \
     ros-$ROS_DISTRO-slam-toolbox \
     python3-numpy \
-    python3-pyqt5
+    python3-pyqt5 \
+    python3-qrcode \
+    python3-opencv
 export TURTLEBOT3_MODEL=waffle     # needed by ms03 & dynamic packages; add to ~/.bashrc
 ```
 
@@ -163,6 +175,7 @@ Each package is independent — pick the one you want and follow its README:
 - **Behavior tree TurtleBot3 control** → [`ms03_turtlebot3_control/README.md`](ms03_turtlebot3_control/README.md)
 - **Custom A\*/RRT Nav2 planners** → [`dynamic_obstacle_avoidance/README.md`](dynamic_obstacle_avoidance/README.md)
 - **Autonomous navigation GUI (Office/Warehouse)** → [`ms04_autonomous_navigation/README.md`](ms04_autonomous_navigation/README.md) — includes a step-by-step testing guide
+- **Multi-robot collaborative navigation (Project #5)** → [`ms05_multi_robot_collaborative_navigation/README.md`](ms05_multi_robot_collaborative_navigation/README.md) — three packages: `ms05_gazebo_worlds`, `ms05_qr_vision`, `ms05_auto_mapping`
 
 Quick example (ms04 — the GUI drives everything via its buttons):
 
