@@ -1,0 +1,513 @@
+<?xml version="1.0"?>
+<!--
+  multi_room.world - Project #5 shared environment.
+
+  Layout (inner faces, metres):
+    outer rectangle  x in [-10, 10], y in [-8, 8], walls 2.5 m high / 0.2 m thick
+    central core     solid block x in [-3, 3], y in [-2.5, 2.5]
+    rooms (4):       01 NW x in [-10, -4.5] y in [3, 8]
+                     02 NE x in [4.5, 10]    y in [3, 8]
+                     03 SE x in [4.5, 10]    y in [-8, -3]
+                     04 SW x in [-10, -4.5]  y in [-8, -3]
+    corridors        everything else - one loop circling the core; every room
+                     has two 1.1 m doorways (Waffle is 0.281 m wide) into it
+    obstacles        crates in every room plus corridor pillars, so per-room
+                     exploration is non-trivial
+
+  QR wall markers: 8 panels, one model each, mounted at the nominal poses in
+  markers/qr_markers.yaml (that file is the registry: id, payload, room, wall,
+  nominal_pose). Textures are emitted by tools/generate_qr_markers.py and
+  referenced relative to this world file (../markers/<file>.png).
+  URI form verified in gz sim:
+    ../markers/<file>.png  -> resolves from both source and install layouts,
+                              no environment setup needed (this world's choice)
+    model://ms05_gazebo_worlds/markers/<file>.png
+                            -> resolves only when GZ_SIM_RESOURCE_PATH contains
+                              the parent of ms05_gazebo_worlds; without it the
+                              panel renders textureless (verified)
+-->
+<sdf version="1.8">
+  <world name="multi_room">
+    <physics type="ode">
+      <real_time_update_rate>1000.0</real_time_update_rate>
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <ode>
+        <solver>
+          <type>quick</type>
+          <iters>150</iters>
+          <precon_iters>0</precon_iters>
+          <sor>1.4</sor>
+          <use_dynamic_moi_rescaling>1</use_dynamic_moi_rescaling>
+        </solver>
+        <constraints>
+          <cfm>0.00001</cfm>
+          <erp>0.2</erp>
+          <contact_max_correcting_vel>2000.0</contact_max_correcting_vel>
+          <contact_surface_layer>0.01</contact_surface_layer>
+        </constraints>
+      </ode>
+    </physics>
+
+    <!-- Essential Gazebo Plugins for Simulation -->
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
+
+    <!-- Ambient Lighting & Sun -->
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <!-- Ground Plane -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>50 50</size>
+            </plane>
+          </geometry>
+          <surface>
+            <friction>
+              <ode>
+                <mu>100</mu>
+                <mu2>50</mu2>
+              </ode>
+            </friction>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>50 50</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>0.85 0.85 0.85 1</ambient>
+            <diffuse>0.85 0.85 0.85 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Multi-room structure: perimeter, core, room partitions, obstacles -->
+    <model name="multi_room_structure">
+      <static>true</static>
+      <link name="structure_link">
+
+        <!-- Perimeter walls (20.2 x 16.2 outer, 2.5 m high, 0.2 m thick) -->
+        <collision name="north_wall_col">
+          <pose>0 8.1 1.25 0 0 0</pose>
+          <geometry><box><size>20.2 0.2 2.5</size></box></geometry>
+        </collision>
+        <visual name="north_wall_vis">
+          <pose>0 8.1 1.25 0 0 0</pose>
+          <geometry><box><size>20.2 0.2 2.5</size></box></geometry>
+          <material><ambient>0.7 0.72 0.75 1</ambient><diffuse>0.7 0.72 0.75 1</diffuse></material>
+        </visual>
+
+        <collision name="south_wall_col">
+          <pose>0 -8.1 1.25 0 0 0</pose>
+          <geometry><box><size>20.2 0.2 2.5</size></box></geometry>
+        </collision>
+        <visual name="south_wall_vis">
+          <pose>0 -8.1 1.25 0 0 0</pose>
+          <geometry><box><size>20.2 0.2 2.5</size></box></geometry>
+          <material><ambient>0.7 0.72 0.75 1</ambient><diffuse>0.7 0.72 0.75 1</diffuse></material>
+        </visual>
+
+        <collision name="west_wall_col">
+          <pose>-10.1 0 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 16.2 2.5</size></box></geometry>
+        </collision>
+        <visual name="west_wall_vis">
+          <pose>-10.1 0 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 16.2 2.5</size></box></geometry>
+          <material><ambient>0.7 0.72 0.75 1</ambient><diffuse>0.7 0.72 0.75 1</diffuse></material>
+        </visual>
+
+        <collision name="east_wall_col">
+          <pose>10.1 0 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 16.2 2.5</size></box></geometry>
+        </collision>
+        <visual name="east_wall_vis">
+          <pose>10.1 0 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 16.2 2.5</size></box></geometry>
+          <material><ambient>0.7 0.72 0.75 1</ambient><diffuse>0.7 0.72 0.75 1</diffuse></material>
+        </visual>
+
+        <!-- Central core (solid block around which the corridor loops) -->
+        <collision name="core_col">
+          <pose>0 0 1.25 0 0 0</pose>
+          <geometry><box><size>6.0 5.0 2.5</size></box></geometry>
+        </collision>
+        <visual name="core_vis">
+          <pose>0 0 1.25 0 0 0</pose>
+          <geometry><box><size>6.0 5.0 2.5</size></box></geometry>
+          <material><ambient>0.62 0.64 0.68 1</ambient><diffuse>0.62 0.64 0.68 1</diffuse></material>
+        </visual>
+
+        <!-- Room 01 (NW): east partition y 3..8 with doorway y 4.45..5.55,
+             south partition x -10..-4.5 with doorway x -8.05..-6.95 -->
+        <collision name="r01_east_part_n_col">
+          <pose>-4.5 3.725 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 1.45 2.5</size></box></geometry>
+        </collision>
+        <visual name="r01_east_part_n_vis">
+          <pose>-4.5 3.725 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 1.45 2.5</size></box></geometry>
+          <material><ambient>0.8 0.82 0.85 1</ambient><diffuse>0.8 0.82 0.85 1</diffuse></material>
+        </visual>
+        <collision name="r01_east_part_s_col">
+          <pose>-4.5 6.775 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 2.45 2.5</size></box></geometry>
+        </collision>
+        <visual name="r01_east_part_s_vis">
+          <pose>-4.5 6.775 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 2.45 2.5</size></box></geometry>
+          <material><ambient>0.8 0.82 0.85 1</ambient><diffuse>0.8 0.82 0.85 1</diffuse></material>
+        </visual>
+        <collision name="r01_south_part_w_col">
+          <pose>-9.025 3 1.25 0 0 0</pose>
+          <geometry><box><size>1.95 0.2 2.5</size></box></geometry>
+        </collision>
+        <visual name="r01_south_part_w_vis">
+          <pose>-9.025 3 1.25 0 0 0</pose>
+          <geometry><box><size>1.95 0.2 2.5</size></box></geometry>
+          <material><ambient>0.8 0.82 0.85 1</ambient><diffuse>0.8 0.82 0.85 1</diffuse></material>
+        </visual>
+        <collision name="r01_south_part_e_col">
+          <pose>-5.725 3 1.25 0 0 0</pose>
+          <geometry><box><size>2.45 0.2 2.5</size></box></geometry>
+        </collision>
+        <visual name="r01_south_part_e_vis">
+          <pose>-5.725 3 1.25 0 0 0</pose>
+          <geometry><box><size>2.45 0.2 2.5</size></box></geometry>
+          <material><ambient>0.8 0.82 0.85 1</ambient><diffuse>0.8 0.82 0.85 1</diffuse></material>
+        </visual>
+
+        <!-- Room 02 (NE): west partition y 3..8 with doorway y 4.45..5.55,
+             south partition x 4.5..10 with doorway x 6.95..8.05 -->
+        <collision name="r02_west_part_s_col">
+          <pose>4.5 3.725 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 1.45 2.5</size></box></geometry>
+        </collision>
+        <visual name="r02_west_part_s_vis">
+          <pose>4.5 3.725 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 1.45 2.5</size></box></geometry>
+          <material><ambient>0.8 0.82 0.85 1</ambient><diffuse>0.8 0.82 0.85 1</diffuse></material>
+        </visual>
+        <collision name="r02_west_part_n_col">
+          <pose>4.5 6.775 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 2.45 2.5</size></box></geometry>
+        </collision>
+        <visual name="r02_west_part_n_vis">
+          <pose>4.5 6.775 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 2.45 2.5</size></box></geometry>
+          <material><ambient>0.8 0.82 0.85 1</ambient><diffuse>0.8 0.82 0.85 1</diffuse></material>
+        </visual>
+        <collision name="r02_south_part_w_col">
+          <pose>5.725 3 1.25 0 0 0</pose>
+          <geometry><box><size>2.45 0.2 2.5</size></box></geometry>
+        </collision>
+        <visual name="r02_south_part_w_vis">
+          <pose>5.725 3 1.25 0 0 0</pose>
+          <geometry><box><size>2.45 0.2 2.5</size></box></geometry>
+          <material><ambient>0.8 0.82 0.85 1</ambient><diffuse>0.8 0.82 0.85 1</diffuse></material>
+        </visual>
+        <collision name="r02_south_part_e_col">
+          <pose>9.025 3 1.25 0 0 0</pose>
+          <geometry><box><size>1.95 0.2 2.5</size></box></geometry>
+        </collision>
+        <visual name="r02_south_part_e_vis">
+          <pose>9.025 3 1.25 0 0 0</pose>
+          <geometry><box><size>1.95 0.2 2.5</size></box></geometry>
+          <material><ambient>0.8 0.82 0.85 1</ambient><diffuse>0.8 0.82 0.85 1</diffuse></material>
+        </visual>
+
+        <!-- Room 03 (SE): west partition y -8..-3 with doorway y -5.55..-4.45,
+             north partition x 4.5..10 with doorway x 6.95..8.05 -->
+        <collision name="r03_west_part_n_col">
+          <pose>4.5 -3.725 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 1.45 2.5</size></box></geometry>
+        </collision>
+        <visual name="r03_west_part_n_vis">
+          <pose>4.5 -3.725 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 1.45 2.5</size></box></geometry>
+          <material><ambient>0.8 0.82 0.85 1</ambient><diffuse>0.8 0.82 0.85 1</diffuse></material>
+        </visual>
+        <collision name="r03_west_part_s_col">
+          <pose>4.5 -6.775 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 2.45 2.5</size></box></geometry>
+        </collision>
+        <visual name="r03_west_part_s_vis">
+          <pose>4.5 -6.775 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 2.45 2.5</size></box></geometry>
+          <material><ambient>0.8 0.82 0.85 1</ambient><diffuse>0.8 0.82 0.85 1</diffuse></material>
+        </visual>
+        <collision name="r03_north_part_w_col">
+          <pose>5.725 -3 1.25 0 0 0</pose>
+          <geometry><box><size>2.45 0.2 2.5</size></box></geometry>
+        </collision>
+        <visual name="r03_north_part_w_vis">
+          <pose>5.725 -3 1.25 0 0 0</pose>
+          <geometry><box><size>2.45 0.2 2.5</size></box></geometry>
+          <material><ambient>0.8 0.82 0.85 1</ambient><diffuse>0.8 0.82 0.85 1</diffuse></material>
+        </visual>
+        <collision name="r03_north_part_e_col">
+          <pose>9.025 -3 1.25 0 0 0</pose>
+          <geometry><box><size>1.95 0.2 2.5</size></box></geometry>
+        </collision>
+        <visual name="r03_north_part_e_vis">
+          <pose>9.025 -3 1.25 0 0 0</pose>
+          <geometry><box><size>1.95 0.2 2.5</size></box></geometry>
+          <material><ambient>0.8 0.82 0.85 1</ambient><diffuse>0.8 0.82 0.85 1</diffuse></material>
+        </visual>
+
+        <!-- Room 04 (SW): east partition y -8..-3 with doorway y -5.55..-4.45,
+             north partition x -10..-4.5 with doorway x -8.05..-6.95 -->
+        <collision name="r04_east_part_n_col">
+          <pose>-4.5 -3.725 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 1.45 2.5</size></box></geometry>
+        </collision>
+        <visual name="r04_east_part_n_vis">
+          <pose>-4.5 -3.725 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 1.45 2.5</size></box></geometry>
+          <material><ambient>0.8 0.82 0.85 1</ambient><diffuse>0.8 0.82 0.85 1</diffuse></material>
+        </visual>
+        <collision name="r04_east_part_s_col">
+          <pose>-4.5 -6.775 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 2.45 2.5</size></box></geometry>
+        </collision>
+        <visual name="r04_east_part_s_vis">
+          <pose>-4.5 -6.775 1.25 0 0 0</pose>
+          <geometry><box><size>0.2 2.45 2.5</size></box></geometry>
+          <material><ambient>0.8 0.82 0.85 1</ambient><diffuse>0.8 0.82 0.85 1</diffuse></material>
+        </visual>
+        <collision name="r04_north_part_w_col">
+          <pose>-9.025 -3 1.25 0 0 0</pose>
+          <geometry><box><size>1.95 0.2 2.5</size></box></geometry>
+        </collision>
+        <visual name="r04_north_part_w_vis">
+          <pose>-9.025 -3 1.25 0 0 0</pose>
+          <geometry><box><size>1.95 0.2 2.5</size></box></geometry>
+          <material><ambient>0.8 0.82 0.85 1</ambient><diffuse>0.8 0.82 0.85 1</diffuse></material>
+        </visual>
+        <collision name="r04_north_part_e_col">
+          <pose>-5.725 -3 1.25 0 0 0</pose>
+          <geometry><box><size>2.45 0.2 2.5</size></box></geometry>
+        </collision>
+        <visual name="r04_north_part_e_vis">
+          <pose>-5.725 -3 1.25 0 0 0</pose>
+          <geometry><box><size>2.45 0.2 2.5</size></box></geometry>
+          <material><ambient>0.8 0.82 0.85 1</ambient><diffuse>0.8 0.82 0.85 1</diffuse></material>
+        </visual>
+
+        <!-- Room crates (two per room, clear of doorways and marker sightlines) -->
+        <collision name="r01_crate1_col"><pose>-8.7 7.0 0.25 0 0 0</pose><geometry><box><size>0.6 0.6 0.5</size></box></geometry></collision>
+        <visual name="r01_crate1_vis"><pose>-8.7 7.0 0.25 0 0 0</pose><geometry><box><size>0.6 0.6 0.5</size></box></geometry><material><ambient>0.4 0.27 0.12 1</ambient><diffuse>0.4 0.27 0.12 1</diffuse></material></visual>
+        <collision name="r01_crate2_col"><pose>-5.9 4.0 0.3 0 0 0</pose><geometry><box><size>0.7 0.5 0.6</size></box></geometry></collision>
+        <visual name="r01_crate2_vis"><pose>-5.9 4.0 0.3 0 0 0</pose><geometry><box><size>0.7 0.5 0.6</size></box></geometry><material><ambient>0.4 0.27 0.12 1</ambient><diffuse>0.4 0.27 0.12 1</diffuse></material></visual>
+
+        <collision name="r02_crate1_col"><pose>8.7 7.0 0.25 0 0 0</pose><geometry><box><size>0.6 0.6 0.5</size></box></geometry></collision>
+        <visual name="r02_crate1_vis"><pose>8.7 7.0 0.25 0 0 0</pose><geometry><box><size>0.6 0.6 0.5</size></box></geometry><material><ambient>0.4 0.27 0.12 1</ambient><diffuse>0.4 0.27 0.12 1</diffuse></material></visual>
+        <collision name="r02_crate2_col"><pose>5.9 4.0 0.3 0 0 0</pose><geometry><box><size>0.7 0.5 0.6</size></box></geometry></collision>
+        <visual name="r02_crate2_vis"><pose>5.9 4.0 0.3 0 0 0</pose><geometry><box><size>0.7 0.5 0.6</size></box></geometry><material><ambient>0.4 0.27 0.12 1</ambient><diffuse>0.4 0.27 0.12 1</diffuse></material></visual>
+
+        <collision name="r03_crate1_col"><pose>8.7 -7.0 0.25 0 0 0</pose><geometry><box><size>0.6 0.6 0.5</size></box></geometry></collision>
+        <visual name="r03_crate1_vis"><pose>8.7 -7.0 0.25 0 0 0</pose><geometry><box><size>0.6 0.6 0.5</size></box></geometry><material><ambient>0.4 0.27 0.12 1</ambient><diffuse>0.4 0.27 0.12 1</diffuse></material></visual>
+        <collision name="r03_crate2_col"><pose>5.9 -4.0 0.3 0 0 0</pose><geometry><box><size>0.7 0.5 0.6</size></box></geometry></collision>
+        <visual name="r03_crate2_vis"><pose>5.9 -4.0 0.3 0 0 0</pose><geometry><box><size>0.7 0.5 0.6</size></box></geometry><material><ambient>0.4 0.27 0.12 1</ambient><diffuse>0.4 0.27 0.12 1</diffuse></material></visual>
+
+        <collision name="r04_crate1_col"><pose>-8.7 -7.0 0.25 0 0 0</pose><geometry><box><size>0.6 0.6 0.5</size></box></geometry></collision>
+        <visual name="r04_crate1_vis"><pose>-8.7 -7.0 0.25 0 0 0</pose><geometry><box><size>0.6 0.6 0.5</size></box></geometry><material><ambient>0.4 0.27 0.12 1</ambient><diffuse>0.4 0.27 0.12 1</diffuse></material></visual>
+        <collision name="r04_crate2_col"><pose>-5.9 -4.0 0.3 0 0 0</pose><geometry><box><size>0.7 0.5 0.6</size></box></geometry></collision>
+        <visual name="r04_crate2_vis"><pose>-5.9 -4.0 0.3 0 0 0</pose><geometry><box><size>0.7 0.5 0.6</size></box></geometry><material><ambient>0.4 0.27 0.12 1</ambient><diffuse>0.4 0.27 0.12 1</diffuse></material></visual>
+
+        <!-- Corridor obstacles (loop stays drivable around them) -->
+        <collision name="west_pillar_col"><pose>-7.5 0 0.6 0 0 0</pose><geometry><box><size>0.6 0.6 1.2</size></box></geometry></collision>
+        <visual name="west_pillar_vis"><pose>-7.5 0 0.6 0 0 0</pose><geometry><box><size>0.6 0.6 1.2</size></box></geometry><material><ambient>0.55 0.55 0.6 1</ambient><diffuse>0.55 0.55 0.6 1</diffuse></material></visual>
+        <collision name="east_pillar_col"><pose>7.5 0 0.6 0 0 0</pose><geometry><box><size>0.6 0.6 1.2</size></box></geometry></collision>
+        <visual name="east_pillar_vis"><pose>7.5 0 0.6 0 0 0</pose><geometry><box><size>0.6 0.6 1.2</size></box></geometry><material><ambient>0.55 0.55 0.6 1</ambient><diffuse>0.55 0.55 0.6 1</diffuse></material></visual>
+        <collision name="north_hall_crate_col"><pose>-2.5 6.5 0.4 0 0 0</pose><geometry><box><size>1.0 1.0 0.8</size></box></geometry></collision>
+        <visual name="north_hall_crate_vis"><pose>-2.5 6.5 0.4 0 0 0</pose><geometry><box><size>1.0 1.0 0.8</size></box></geometry><material><ambient>0.4 0.27 0.12 1</ambient><diffuse>0.4 0.27 0.12 1</diffuse></material></visual>
+        <collision name="south_hall_crate_col"><pose>2.5 -6.5 0.4 0 0 0</pose><geometry><box><size>1.0 1.0 0.8</size></box></geometry></collision>
+        <visual name="south_hall_crate_vis"><pose>2.5 -6.5 0.4 0 0 0</pose><geometry><box><size>1.0 1.0 0.8</size></box></geometry><material><ambient>0.4 0.27 0.12 1</ambient><diffuse>0.4 0.27 0.12 1</diffuse></material></visual>
+      </link>
+    </model>
+
+    <!-- QR wall markers - poses and payloads from markers/qr_markers.yaml -->
+    <model name="qr_marker_00">
+      <static>true</static>
+      <pose>-7.25 7.99 0.30 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>0.45 0.02 0.45</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient>
+            <diffuse>1 1 1 1</diffuse>
+            <specular>0 0 0 1</specular>
+            <pbr><metal>
+              <albedo_map>../markers/qr_room_01_00.png</albedo_map>
+              <roughness>0.9</roughness>
+              <metalness>0.0</metalness>
+            </metal></pbr>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="qr_marker_01">
+      <static>true</static>
+      <pose>-9.99 5.5 0.30 0 0 1.5707963</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>0.45 0.02 0.45</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient>
+            <diffuse>1 1 1 1</diffuse>
+            <specular>0 0 0 1</specular>
+            <pbr><metal>
+              <albedo_map>../markers/qr_room_01_01.png</albedo_map>
+              <roughness>0.9</roughness>
+              <metalness>0.0</metalness>
+            </metal></pbr>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="qr_marker_02">
+      <static>true</static>
+      <pose>7.25 7.99 0.30 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>0.45 0.02 0.45</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient>
+            <diffuse>1 1 1 1</diffuse>
+            <specular>0 0 0 1</specular>
+            <pbr><metal>
+              <albedo_map>../markers/qr_room_02_02.png</albedo_map>
+              <roughness>0.9</roughness>
+              <metalness>0.0</metalness>
+            </metal></pbr>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="qr_marker_03">
+      <static>true</static>
+      <pose>9.99 5.5 0.30 0 0 -1.5707963</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>0.45 0.02 0.45</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient>
+            <diffuse>1 1 1 1</diffuse>
+            <specular>0 0 0 1</specular>
+            <pbr><metal>
+              <albedo_map>../markers/qr_room_02_03.png</albedo_map>
+              <roughness>0.9</roughness>
+              <metalness>0.0</metalness>
+            </metal></pbr>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="qr_marker_04">
+      <static>true</static>
+      <pose>7.25 -7.99 0.30 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>0.45 0.02 0.45</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient>
+            <diffuse>1 1 1 1</diffuse>
+            <specular>0 0 0 1</specular>
+            <pbr><metal>
+              <albedo_map>../markers/qr_room_03_04.png</albedo_map>
+              <roughness>0.9</roughness>
+              <metalness>0.0</metalness>
+            </metal></pbr>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="qr_marker_05">
+      <static>true</static>
+      <pose>9.99 -5.5 0.30 0 0 -1.5707963</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>0.45 0.02 0.45</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient>
+            <diffuse>1 1 1 1</diffuse>
+            <specular>0 0 0 1</specular>
+            <pbr><metal>
+              <albedo_map>../markers/qr_room_03_05.png</albedo_map>
+              <roughness>0.9</roughness>
+              <metalness>0.0</metalness>
+            </metal></pbr>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="qr_marker_06">
+      <static>true</static>
+      <pose>-7.25 -7.99 0.30 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>0.45 0.02 0.45</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient>
+            <diffuse>1 1 1 1</diffuse>
+            <specular>0 0 0 1</specular>
+            <pbr><metal>
+              <albedo_map>../markers/qr_room_04_06.png</albedo_map>
+              <roughness>0.9</roughness>
+              <metalness>0.0</metalness>
+            </metal></pbr>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="qr_marker_07">
+      <static>true</static>
+      <pose>-9.99 -5.5 0.30 0 0 1.5707963</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>0.45 0.02 0.45</size></box></geometry>
+          <material>
+            <ambient>1 1 1 1</ambient>
+            <diffuse>1 1 1 1</diffuse>
+            <specular>0 0 0 1</specular>
+            <pbr><metal>
+              <albedo_map>../markers/qr_room_04_07.png</albedo_map>
+              <roughness>0.9</roughness>
+              <metalness>0.0</metalness>
+            </metal></pbr>
+          </material>
+        </visual>
+      </link>
+    </model>
+  </world>
+</sdf>

@@ -40,9 +40,9 @@ ms05:<room>:<index>
 |---|---|---|
 | `ms05` | literal project namespace — a decoded string not starting with `ms05:` is not one of ours | `ms05` |
 | `<room>` | room identifier exactly as listed in `ms05_gazebo_worlds/markers/qr_markers.yaml` | `01` |
-| `<index>` | zero-padded marker index within that room | `00` |
+| `<index>` | zero-padded two-digit marker index, **unique across the world** (`00`–`07`) — it is the `marker_id` used in `QrDetection` | `00` |
 
-Example: `ms05:01:00`. The format is self-describing, so `ms05_qr_vision` parses it directly — split on `:`, expect exactly three fields — with no lookup against the marker registry.
+Example: `ms05:01:00`. The format is self-describing, so `ms05_qr_vision` parses it directly — split on `:`, expect exactly three fields, `marker_id = int(index)` — with no lookup against the marker registry.
 
 ### Interfaces
 
