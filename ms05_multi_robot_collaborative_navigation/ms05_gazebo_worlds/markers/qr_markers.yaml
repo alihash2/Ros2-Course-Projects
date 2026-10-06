@@ -1,0 +1,67 @@
+# QR marker registry for worlds/multi_room.world
+#
+# Single source of truth for the wall markers:
+#   - tools/generate_qr_markers.py reads it and emits the PNG textures
+#     (qr_room_<room>_<index>.png, derived from the payload),
+#   - worlds/multi_room.world mounts one thin panel per marker at its
+#     nominal_pose,
+#   - ms05_qr_vision parses the payload (contract in the folder README).
+#
+# Contract: payload = "ms05:<room>:<index>"
+#   <room>   two-digit room id ("01".."04")
+#   <index>  zero-padded two-digit marker index, UNIQUE ACROSS THE WORLD
+#            ("00".."07") - it is the marker_id used in QrDetection
+#
+# nominal_pose is the panel centre in world frame: x, y, z [m] and yaw [rad]
+# (SDF pose order x y z roll pitch yaw, roll = pitch = 0). z is 0.30 m so a
+# marker sits inside the view of the Waffle camera (~0.12 m height, vfov
+# ~34 deg) from roughly 1 m to 4 m.
+
+markers:
+  - marker_id: 0
+    payload: "ms05:01:00"
+    room: "01"
+    wall: north
+    nominal_pose: {x: -7.25, y: 7.99, z: 0.30, yaw: 0.0}
+
+  - marker_id: 1
+    payload: "ms05:01:01"
+    room: "01"
+    wall: west
+    nominal_pose: {x: -9.99, y: 5.5, z: 0.30, yaw: 1.5707963267948966}
+
+  - marker_id: 2
+    payload: "ms05:02:02"
+    room: "02"
+    wall: north
+    nominal_pose: {x: 7.25, y: 7.99, z: 0.30, yaw: 0.0}
+
+  - marker_id: 3
+    payload: "ms05:02:03"
+    room: "02"
+    wall: east
+    nominal_pose: {x: 9.99, y: 5.5, z: 0.30, yaw: -1.5707963267948966}
+
+  - marker_id: 4
+    payload: "ms05:03:04"
+    room: "03"
+    wall: south
+    nominal_pose: {x: 7.25, y: -7.99, z: 0.30, yaw: 0.0}
+
+  - marker_id: 5
+    payload: "ms05:03:05"
+    room: "03"
+    wall: east
+    nominal_pose: {x: 9.99, y: -5.5, z: 0.30, yaw: -1.5707963267948966}
+
+  - marker_id: 6
+    payload: "ms05:04:06"
+    room: "04"
+    wall: south
+    nominal_pose: {x: -7.25, y: -7.99, z: 0.30, yaw: 0.0}
+
+  - marker_id: 7
+    payload: "ms05:04:07"
+    room: "04"
+    wall: west
+    nominal_pose: {x: -9.99, y: -5.5, z: 0.30, yaw: 1.5707963267948966}
